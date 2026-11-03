@@ -1,0 +1,27 @@
+{
+  "name": "living-architecture",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "server": "node --env-file-if-exists=.env --watch-path=server --watch-path=src/model.js server/index.js",
+    "build": "vite build",
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "test": "node --test server/scoring.test.js"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "1.1.4",
+    "@fontsource/rubik": "5.1.0",
+    "@xyflow/react": "12.3.6",
+    "express": "4.21.2",
+    "lucide-react": "0.460.0",
+    "mongodb": "6.12.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.4",
+    "vite": "5.4.11"
+  }
+}

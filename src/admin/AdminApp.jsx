@@ -1,0 +1,169 @@
+import { useCallback, useEffect, useState } from 'react';
+import { adminApi, clearToken, readToken, storeToken } from '../api.js';
+import ArchitectureEditor from './ArchitectureEditor.jsx';
+import PlayersPanel from './PlayersPanel.jsx';
+import QuestionsPanel from './QuestionsPanel.jsx';
+import SettingsPanel from './SettingsPanel.jsx';
+import Avatar from '../Avatar.jsx';
+import { Building2, Gamepad2, Gift, LogOut, Network, Settings, ShieldCheck, Sun, Users } from 'lucide-react';
+import BonusPanel from './BonusPanel.jsx';
+
+const SECTIONS = [
+  ['questions', 'שאלות ותשובות', Sun],
+  ['architecture', 'ארכיטקטורה', Network],
+  ['players', 'שחקנים', Users],
+  ['bonus', 'בונוסים', Gift],
+  ['settings', 'הגדרות', Settings],
+];
+
+function AdminLogin({ onLogin, error }) {
+  const [code, setCode] = useState('');
+  return (
+    <div className="center-page">
+      <form
+        className="card login-card"
+        onSubmit={(e) => { e.preventDefault(); if (code) onLogin(code); }}
+      >
+        <span className="logo big-logo"><ShieldCheck size={26} /></span>
+        <h1>כניסת מנהל</h1>
+        <p className="muted small">ארכיטקטורה חיה</p>
+        <input
+          type="password"
+          autoFocus
+          autoComplete="current-password"
+          placeholder="קוד מנהל"
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+        />
+        <button className="primary" type="submit">כניסה</button>
+        {error && <p className="login-error">{error}</p>}
+      </form>
+    </div>
+  );
+}
+
+// Lets the admin pick (or create) their own player, then jumps straight into the game.
+function JoinGameDialog({ players, onClose }) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+
+  const play = (player) => {
+    storeToken('player', player.token);
+    window.location.hash = '#/play';
+  };
+
+  const create = (e) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    adminApi.post('/players', { name: name.trim() }).then(play).catch((err) => setError(err.message));
+  };
+
+  const active = players.filter((p) => p.active !== false);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="card modal" onClick={(e) => e.stopPropagation()}>
+        <h2>🎮 מי אתה במשחק?</h2>
+        {active.length > 0 && (
+          <>
+            <p className="muted">כבר הוספת את עצמך? בחר את השם שלך:</p>
+            <div className="join-list">
+              {active.map((p) => (
+                <button key={p.id} onClick={() => play(p)}>
+                  <Avatar name={p.name} photo={p.photo} size={28} /> {p.name}
+                </button>
+              ))}
+            </div>
+            <p className="muted">או צור שחקן חדש:</p>
+          </>
+        )}
+        <form className="row" onSubmit={create}>
+          <input autoFocus placeholder="השם שלך" value={name} onChange={(e) => setName(e.target.value)} />
+          <button className="primary" type="submit">צור ושחק</button>
+        </form>
+        {error && <p className="login-error">{error}</p>}
+        <button className="ghost" onClick={onClose}>ביטול</button>
+      </div>
+    </div>
+  );
+}
+
+export default function AdminApp() {
+  const [state, setState] = useState(null);
+  const [needLogin, setNeedLogin] = useState(!readToken('admin'));
+  const [loginError, setLoginError] = useState('');
+  const [section, setSection] = useState('questions');
+  const [joining, setJoining] = useState(false);
+
+  const load = useCallback(() => {
+    adminApi.get('/state')
+      .then((s) => { setState(s); setNeedLogin(false); setLoginError(''); })
+      .catch((e) => {
+        clearToken('admin');
+        setNeedLogin(true);
+        setLoginError(e.status === 429 ? e.message : 'הקוד השמור כבר לא תקף, היכנס מחדש');
+      });
+  }, []);
+  useEffect(() => { if (readToken('admin')) load(); }, [load]);
+
+  const login = (code) => {
+    storeToken('admin', code);
+    adminApi.get('/state')
+      .then((s) => { setState(s); setNeedLogin(false); setLoginError(''); })
+      .catch((e) => { clearToken('admin'); setLoginError(e.status === 401 ? 'קוד שגוי' : e.message); });
+  };
+
+  const logout = () => {
+    clearToken('admin');
+    setState(null);
+    setNeedLogin(true);
+  };
+
+  const persistArchitecture = useCallback(async (arch) => {
+    const res = await adminApi.put('/architecture', arch);
+    setState((s) => ({ ...s, architecture: arch, purchaseCounts: res.purchaseCounts }));
+    return res;
+  }, []);
+
+  if (needLogin) return <AdminLogin onLogin={login} error={loginError} />;
+  if (!state) return <div className="center-page muted">טוען...</div>;
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="logo"><Building2 size={20} /></span>
+          <div>
+            <h1>ארכיטקטורה חיה</h1>
+            <span className="badge"><ShieldCheck size={11} /> פאנל מנהל</span>
+          </div>
+        </div>
+        <nav className="tabs main-tabs">
+          {SECTIONS.map(([key, label, Icon]) => (
+            <button key={key} className={section === key ? 'active' : ''} onClick={() => setSection(key)}>
+              <Icon size={16} /> {label}
+            </button>
+          ))}
+        </nav>
+        <div className="topbar-end">
+          {/* Only trust a saved player link that still belongs to an existing player. */}
+          {state.players.some((p) => p.token === readToken('player')) ? (
+            <a className="switch-link" href="#/play"><Gamepad2 size={15} /> עבור למשחק</a>
+          ) : (
+            <button className="switch-link" onClick={() => setJoining(true)}><Gamepad2 size={15} /> גם אני רוצה לשחק</button>
+          )}
+          <button className="ghost" onClick={logout} title="מוחק את קוד המנהל מהדפדפן הזה"><LogOut size={15} /> התנתק</button>
+        </div>
+      </header>
+
+      {section === 'architecture' && (
+        <ArchitectureEditor initial={state.architecture} onPersist={persistArchitecture} purchaseCounts={state.purchaseCounts} />
+      )}
+      {section === 'players' && <PlayersPanel players={state.players} onChange={load} />}
+      {section === 'questions' && <QuestionsPanel architecture={state.architecture} players={state.players} today={state.today} />}
+      {section === 'bonus' && <BonusPanel players={state.players} />}
+      {section === 'settings' &&<SettingsPanel settings={state.settings} store={state.store} onChange={load} />}
+      {joining && <JoinGameDialog players={state.players} onClose={() => setJoining(false)} />}
+    </div>
+  );
+}
