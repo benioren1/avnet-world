@@ -35,6 +35,8 @@ test('closest player and players who beat the crowd get bonuses', () => {
   assert.equal(by.a.bonus, 30); // closest + beat crowd (crowd avg 216)
   assert.equal(by.b.bonus, 10);
   assert.equal(by.c.bonus, 0);
+  assert.deepEqual([by.a.closest, by.a.beatCrowd], [true, true]);
+  assert.deepEqual([by.b.closest, by.b.beatCrowd], [false, true]);
 });
 
 test('ties for closest both get the bonus; a single player gets no crowd bonus', () => {

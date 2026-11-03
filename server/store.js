@@ -11,7 +11,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const COLLECTIONS = ['meta', 'players', 'questions', 'guesses', 'purchases', 'bonuses', 'events'];
+const COLLECTIONS = [
+  'meta', 'players', 'questions', 'guesses', 'purchases', 'bonuses', 'events',
+  // Season 2
+  'spend', 'incidents', 'pranks', 'billboards', 'votes',
+];
 
 function matches(doc, filter) {
   return Object.entries(filter).every(([k, v]) => {
@@ -71,6 +75,8 @@ async function createMongoStore(url, dbName) {
   for (const c of COLLECTIONS) await db.collection(c).createIndex({ id: 1 }, { unique: true });
   await db.collection('guesses').createIndex({ questionId: 1 });
   await db.collection('purchases').createIndex({ playerId: 1 });
+  await db.collection('bonuses').createIndex({ playerId: 1 });
+  await db.collection('spend').createIndex({ playerId: 1 });
   const opts = { projection: { _id: 0 } };
 
   return {

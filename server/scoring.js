@@ -34,7 +34,8 @@ export function pointsForError(err) {
 }
 
 // guesses: [{ playerId, value }] for one question.
-// Returns [{ playerId, error, points, bonus }].
+// Returns [{ playerId, error, points, bonus, closest, beatCrowd }]; the two flags let the
+// UI explain the bonus ("+20 closest, +10 beat the crowd").
 export function scoreQuestion(guesses, actual) {
   if (!guesses.length) return [];
   const errors = guesses.map((g) => relativeError(g.value, actual));
@@ -44,10 +45,10 @@ export function scoreQuestion(guesses, actual) {
 
   return guesses.map((g, i) => {
     const error = errors[i];
-    let bonus = 0;
-    if (error === best) bonus += CLOSEST_BONUS;
-    if (guesses.length > 1 && error < crowdError) bonus += BEAT_CROWD_BONUS;
-    return { playerId: g.playerId, error, points: pointsForError(error), bonus };
+    const closest = error === best;
+    const beatCrowd = guesses.length > 1 && error < crowdError;
+    const bonus = (closest ? CLOSEST_BONUS : 0) + (beatCrowd ? BEAT_CROWD_BONUS : 0);
+    return { playerId: g.playerId, error, points: pointsForError(error), bonus, closest, beatCrowd };
   });
 }
 

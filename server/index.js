@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import { createStore } from './store.js';
+import { createSeason2 } from './season2.js';
 import { perfectDayPlayers, scoreQuestion, PERFECT_DAY_BONUS } from './scoring.js';
 import { sampleArchitecture } from '../src/model.js';
 import { autoLayout } from '../src/layout.js';
@@ -32,8 +33,25 @@ async function getMeta(id, fallback) {
 }
 const setMeta = (id, value) => db.updateOne('meta', { id }, { value }, { upsert: true });
 
+const DEFAULT_SETTINGS = {
+  lockTime: '10:30',
+  // Season 2
+  earlyTime: '10:00',
+  earlyBonus: 10,
+  mineOpen: '07:00',
+  mineClose: '09:45',
+  mineBase: 50,
+  workDays: [0, 1, 2, 3, 4], // Sunday..Thursday
+  incomeRate: 0.02,
+  payoutTime: '18:00',
+  incidentBonus: 200,
+  pranksEnabled: true,
+  voteDay: 4, // Thursday
+  voteBonus: 300,
+};
+
 async function getSettings() {
-  return { lockTime: '10:30', ...(await getMeta('settings', {})) };
+  return { ...DEFAULT_SETTINGS, ...(await getMeta('settings', {})) };
 }
 
 async function getArchitecture() {
@@ -73,17 +91,34 @@ async function addEvent(type, text, playerId = null, extra = {}) {
 const publicPlayer = ({ token, ...p }) => p;
 
 // Balance is derived (earned - spent), so re-scoring a day never double-counts.
+// Spending is split in two: components (purchases) and everything else (the "spend"
+// collection: upgrades, cosmetics, pranks, billboards). Only components and their
+// upgrades count toward the city's value on the leaderboard.
 async function wallet(playerId) {
-  const [guesses, bonuses, purchases] = await Promise.all([
+  const [guesses, bonuses, purchases, spends] = await Promise.all([
     db.find('guesses', { playerId }),
     db.find('bonuses', { playerId }),
     db.find('purchases', { playerId }),
+    db.find('spend', { playerId }),
   ]);
   const earned = guesses.reduce((s, g) => s + (g.points || 0) + (g.bonus || 0), 0)
     + bonuses.reduce((s, b) => s + b.points, 0);
-  const spent = purchases.reduce((s, p) => s + p.price, 0);
-  // City value counts what was actually paid, so later price changes don't move the leaderboard.
-  return { earned, spent, balance: earned - spent, value: spent, owned: purchases.map((p) => p.componentId) };
+  const upgrades = spends.filter((s) => s.kind === 'upgrade');
+  const componentSpend = purchases.reduce((s, p) => s + p.price, 0) + upgrades.reduce((s, u) => s + u.price, 0);
+  const spent = purchases.reduce((s, p) => s + p.price, 0) + spends.reduce((s, x) => s + x.price, 0);
+  const levels = {};
+  upgrades.forEach((u) => { levels[u.ref] = Math.max(levels[u.ref] || 1, u.level); });
+  return {
+    earned,
+    spent,
+    balance: earned - spent,
+    // City value counts what was actually paid, so later price changes don't move the leaderboard.
+    value: componentSpend,
+    owned: purchases.map((p) => p.componentId),
+    paid: Object.fromEntries(purchases.map((p) => [p.componentId, p.price])),
+    levels,
+    spends,
+  };
 }
 
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => {
@@ -143,9 +178,19 @@ async function requirePlayer(req, res, next) {
   next();
 }
 
-// =============== ADMIN ===============
+// =============== ROUTERS ===============
 const admin = express.Router();
 admin.use(requireAdmin);
+const play = express.Router();
+play.use((req, res, next) => requirePlayer(req, res, next).catch(next));
+
+// Season 2 features (mining, incidents, upgrades, cosmetics, pranks, TV...) live in their own module.
+const season2 = createSeason2({
+  db, newId, newToken, nowLocal, today, getMeta, setMeta, getSettings, getArchitecture,
+  addEvent, wallet, wrap, fail, publicPlayer, isLocked, lockAtFor, leaderboard,
+});
+
+// =============== ADMIN ===============
 
 async function purchaseCounts() {
   const counts = {};
@@ -161,6 +206,7 @@ admin.get('/state', wrap(async (req, res) => {
     purchaseCounts: await purchaseCounts(),
     today: today(),
     store: db.kind,
+    ...(await season2.adminExtras()),
   });
 }));
 
@@ -177,6 +223,7 @@ admin.put('/architecture', wrap(async (req, res) => {
     const bought = await db.find('purchases', { componentId: n.id });
     if (!bought.length) continue;
     await db.deleteMany('purchases', { componentId: n.id });
+    await db.deleteMany('spend', { kind: 'upgrade', ref: n.id });
     refunded += bought.length;
     await addEvent('refund', `🔧 הרכיב "${n.data.name}" הוסר מהארכיטקטורה. ${bought.length} שחקנים קיבלו את הכסף בחזרה`);
   }
@@ -184,11 +231,32 @@ admin.put('/architecture', wrap(async (req, res) => {
   res.json({ ok: true, refunded, purchaseCounts: await purchaseCounts() });
 }));
 
+// Every setting is validated by its kind; unknown keys are ignored.
+const TIME_KEYS = ['lockTime', 'earlyTime', 'mineOpen', 'mineClose', 'payoutTime'];
+const NUMBER_KEYS = { earlyBonus: [0, 1000], mineBase: [0, 5000], incidentBonus: [0, 10000], voteBonus: [0, 10000], incomeRate: [0, 0.5], voteDay: [0, 6] };
+
 admin.put('/settings', wrap(async (req, res) => {
-  const { lockTime } = req.body;
-  if (!/^\d{2}:\d{2}$/.test(lockTime || '')) throw fail(400, 'שעת נעילה לא תקינה');
-  await setMeta('settings', { ...(await getSettings()), lockTime });
-  res.json(await getSettings());
+  const next = { ...(await getSettings()) };
+  for (const key of TIME_KEYS) {
+    if (!(key in req.body)) continue;
+    if (!/^\d{2}:\d{2}$/.test(req.body[key] || '')) throw fail(400, `שעה לא תקינה: ${key}`);
+    next[key] = req.body[key];
+  }
+  for (const [key, [min, max]] of Object.entries(NUMBER_KEYS)) {
+    if (!(key in req.body)) continue;
+    const v = Number(req.body[key]);
+    if (!Number.isFinite(v) || v < min || v > max) throw fail(400, `ערך לא תקין: ${key}`);
+    next[key] = v;
+  }
+  if ('pranksEnabled' in req.body) next.pranksEnabled = Boolean(req.body.pranksEnabled);
+  if ('workDays' in req.body) {
+    const days = req.body.workDays;
+    if (!Array.isArray(days) || days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) throw fail(400, 'ימי עבודה לא תקינים');
+    next.workDays = [...new Set(days)].sort();
+  }
+  if (next.mineOpen >= next.mineClose) throw fail(400, 'שעת פתיחת המכרה חייבת להיות לפני שעת הסגירה');
+  await setMeta('settings', next);
+  res.json(next);
 }));
 
 admin.post('/players', wrap(async (req, res) => {
@@ -243,7 +311,11 @@ admin.delete('/bonuses/:id', wrap(async (req, res) => {
 
 admin.delete('/players/:id', wrap(async (req, res) => {
   const playerId = req.params.id;
-  for (const c of ['guesses', 'purchases', 'bonuses']) await db.deleteMany(c, { playerId });
+  for (const c of ['guesses', 'purchases', 'bonuses', 'spend', 'billboards']) await db.deleteMany(c, { playerId });
+  await db.deleteMany('pranks', { target: playerId });
+  await db.deleteMany('pranks', { by: playerId });
+  await db.deleteMany('votes', { voter: playerId });
+  await db.deleteMany('votes', { target: playerId });
   await db.deleteMany('players', { id: playerId });
   res.json({ ok: true });
 }));
@@ -321,6 +393,7 @@ admin.delete('/questions/:id', wrap(async (req, res) => {
   const q = await db.findOne('questions', { id: req.params.id });
   if (q?.resolved) throw fail(400, 'אי אפשר למחוק שאלה שהתוצאות שלה כבר פורסמו: השחקנים כבר קיבלו עליה נקודות');
   await db.deleteMany('guesses', { questionId: req.params.id });
+  await db.deleteMany('bonuses', { questionId: req.params.id }); // early-guess bonuses
   await db.deleteMany('questions', { id: req.params.id });
   res.json({ ok: true });
 }));
@@ -340,7 +413,9 @@ admin.post('/days/:date/resolve', wrap(async (req, res) => {
     if (!Number.isFinite(answer)) throw fail(400, `תשובה לא תקינה לשאלה "${q.text}"`);
     const guesses = await db.find('guesses', { questionId: q.id });
     for (const s of scoreQuestion(guesses, answer)) {
-      await db.updateOne('guesses', { id: `${q.id}:${s.playerId}` }, { points: s.points, bonus: s.bonus, error: s.error });
+      await db.updateOne('guesses', { id: `${q.id}:${s.playerId}` }, {
+        points: s.points, bonus: s.bonus, error: s.error, closest: s.closest, beatCrowd: s.beatCrowd,
+      });
     }
     await db.updateOne('questions', { id: q.id }, { answer, resolved: true });
   }
@@ -376,14 +451,19 @@ admin.post('/days/:date/resolve', wrap(async (req, res) => {
   res.json({ ok: true, allResolved, negative });
 }));
 
+season2.register({ app, admin, play });
 app.use('/api/admin', admin);
 
 // =============== PLAYERS ===============
-const play = express.Router();
-play.use((req, res, next) => requirePlayer(req, res, next).catch(next));
 
 play.get('/me', wrap(async (req, res) => {
-  res.json({ player: publicPlayer(req.player), wallet: await wallet(req.player.id), today: today() });
+  const { spends, ...w } = await wallet(req.player.id);
+  res.json({
+    player: publicPlayer(req.player),
+    wallet: w,
+    today: today(),
+    ...(await season2.meExtras(req.player)),
+  });
 }));
 
 play.get('/architecture', wrap(async (req, res) => res.json(await getArchitecture())));
@@ -405,7 +485,7 @@ play.get('/today', wrap(async (req, res) => {
     if (locked) {
       item.guesses = guesses.filter((g) => g.questionId === q.id).map((g) => ({
         playerId: g.playerId, name: byId[g.playerId]?.name, photo: byId[g.playerId]?.photo,
-        value: g.value, points: g.points, bonus: g.bonus,
+        value: g.value, points: g.points, bonus: g.bonus, closest: g.closest, beatCrowd: g.beatCrowd, early: g.early,
       }));
       item.guessCount = item.guesses.length;
     } else {
@@ -414,9 +494,12 @@ play.get('/today', wrap(async (req, res) => {
     if (q.resolved) item.answer = q.answer;
     out.push(item);
   }
-  const { lockTime } = await getSettings();
-  const dayBonus = (await db.find('bonuses', { date, playerId: req.player.id })).reduce((s, b) => s + b.points, 0);
-  res.json({ date, lockTime, dayBonus, questions: out });
+  const { lockTime, earlyTime, earlyBonus } = await getSettings();
+  // Prediction-related bonuses only (perfect day, early guesses); mining and others show elsewhere.
+  const dayBonus = (await db.find('bonuses', { date, playerId: req.player.id }))
+    .filter((b) => b.kind === 'perfect' || b.kind === 'early')
+    .reduce((s, b) => s + b.points, 0);
+  res.json({ date, lockTime, earlyTime, earlyBonus, now: nowLocal().slice(11), dayBonus, questions: out });
 }));
 
 play.post('/guesses', wrap(async (req, res) => {
@@ -429,8 +512,16 @@ play.post('/guesses', wrap(async (req, res) => {
   if (await isLocked(q)) throw fail(400, 'השאלה כבר ננעלה 🔒');
   const id = `${q.id}:${req.player.id}`;
   if (await db.findOne('guesses', { id })) throw fail(400, 'כבר ניחשת על השאלה הזו');
-  await db.insertOne('guesses', { id, questionId: q.id, playerId: req.player.id, value, at: new Date().toISOString() });
-  res.json({ ok: true });
+  // Early bird: guessing before earlyTime earns a small bonus, kept as its own bonus record.
+  const { earlyTime, earlyBonus } = await getSettings();
+  const early = earlyBonus > 0 && nowLocal().slice(11) < earlyTime;
+  await db.insertOne('guesses', { id, questionId: q.id, playerId: req.player.id, value, early, at: new Date().toISOString() });
+  if (early) {
+    await db.insertOne('bonuses', {
+      id: `${id}:early`, date: q.date, questionId: q.id, playerId: req.player.id, kind: 'early', points: earlyBonus, at: new Date().toISOString(),
+    });
+  }
+  res.json({ ok: true, early, earlyBonus: early ? earlyBonus : 0 });
 }));
 
 play.post('/buy', wrap(async (req, res) => {
@@ -441,18 +532,19 @@ play.post('/buy', wrap(async (req, res) => {
   const price = Number(node.data.price) || 0;
   const w = await wallet(req.player.id);
   if (w.owned.includes(componentId)) throw fail(400, 'הרכיב כבר שלך');
-  if (w.balance < price) throw fail(400, `חסרים לך ${price - w.balance} מטבעות`);
+  if (w.balance < price) throw fail(400, `חסרים לך ${price - w.balance} דינרים`);
   try {
     await db.insertOne('purchases', { id: `${req.player.id}:${componentId}`, playerId: req.player.id, componentId, price, at: new Date().toISOString() });
   } catch (e) {
     if (e.code === 'DUPLICATE') throw fail(400, 'הרכיב כבר שלך');
     throw e;
   }
-  await addEvent('purchase', `🏗️ ${req.player.name} קנה/תה את "${node.data.name}" ב-${price} 🪙`, req.player.id);
+  await addEvent('purchase', `🏗️ ${req.player.name} קנה/תה את "${node.data.name}" ב-${price} דינרים`, req.player.id);
   res.json({ ok: true, wallet: await wallet(req.player.id) });
 }));
 
-play.get('/leaderboard', wrap(async (req, res) => {
+// Shared by the player leaderboard and the office TV screen.
+async function leaderboard() {
   const arch = await getArchitecture();
   const totalComponents = arch.nodes.length;
   const players = (await db.find('players')).filter((p) => p.active !== false);
@@ -465,6 +557,9 @@ play.get('/leaderboard', wrap(async (req, res) => {
     const w = await wallet(p.id);
     const guesses = await db.find('guesses', { playerId: p.id });
     const scored = guesses.filter((g) => typeof g.points === 'number');
+    const dayBonus = (await db.find('bonuses', { playerId: p.id, date }))
+      .filter((b) => b.kind === 'perfect' || b.kind === 'early')
+      .reduce((s, b) => s + b.points, 0);
     rows.push({
       id: p.id,
       name: p.name,
@@ -475,18 +570,21 @@ play.get('/leaderboard', wrap(async (req, res) => {
       balance: w.balance,
       earned: w.earned,
       accuracy: scored.length ? scored.reduce((s, g) => s + g.points, 0) / scored.length : null,
-      todayPoints: guesses.filter((g) => todayIds.has(g.questionId)).reduce((s, g) => s + (g.points || 0) + (g.bonus || 0), 0),
+      todayPoints: guesses.filter((g) => todayIds.has(g.questionId)).reduce((s, g) => s + (g.points || 0) + (g.bonus || 0), 0) + dayBonus,
+      ...(await season2.playerBadges(p)),
     });
   }
-  rows.sort((a, b) => b.value - a.value || b.earned - a.earned);
-  res.json({ rows, totalComponents });
-}));
+  // Ties (e.g. everyone at 0 on day one) are broken by balance, then by accuracy.
+  rows.sort((a, b) => b.value - a.value || b.balance - a.balance || (b.accuracy ?? -1) - (a.accuracy ?? -1));
+  return { rows, totalComponents };
+}
+
+play.get('/leaderboard', wrap(async (req, res) => res.json(await leaderboard())));
 
 play.get('/players/:id/owned', wrap(async (req, res) => {
   const p = await db.findOne('players', { id: req.params.id });
   if (!p) throw fail(404, 'שחקן לא נמצא');
-  const w = await wallet(p.id);
-  res.json({ player: publicPlayer(p), owned: w.owned, value: w.value });
+  res.json(await season2.cityOf(p));
 }));
 
 play.get('/feed', wrap(async (req, res) => {
@@ -503,6 +601,8 @@ if (servesFrontend) {
   app.use(express.static(dist));
   app.get('*', (req, res) => res.sendFile(path.join(dist, 'index.html')));
 }
+
+season2.startJobs();
 
 const server = app.listen(PORT, () => {
   const base = process.env.PUBLIC_URL || (servesFrontend ? `http://localhost:${PORT}` : 'http://localhost:5173');

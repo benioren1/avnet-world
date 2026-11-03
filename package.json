@@ -8,7 +8,7 @@
     "server": "node --env-file-if-exists=.env --watch-path=server --watch-path=src/model.js server/index.js",
     "build": "vite build",
     "start": "node --env-file-if-exists=.env server/index.js",
-    "test": "node --test server/scoring.test.js"
+    "test": "node --test server/scoring.test.js server/calendar.test.js"
   },
   "dependencies": {
     "@dagrejs/dagre": "1.1.4",
