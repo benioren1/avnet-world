@@ -27,7 +27,8 @@ function parseRoute() {
   }
   if (path === '/tv' && params.get('k')) {
     storeToken('tv', params.get('k'));
-    window.history.replaceState(null, '', '#/tv');
+    const only = params.get('only'); // pins one TV slide, kept in the address
+    window.history.replaceState(null, '', only ? `#/tv?only=${encodeURIComponent(only)}` : '#/tv');
   }
   return path || '/play';
 }

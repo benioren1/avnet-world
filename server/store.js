@@ -15,6 +15,8 @@ const COLLECTIONS = [
   'meta', 'players', 'questions', 'guesses', 'purchases', 'bonuses', 'events',
   // Season 2
   'spend', 'incidents', 'billboards', 'votes', 'announcements', 'duels',
+  // TV show
+  'facts',
 ];
 
 function matches(doc, filter) {

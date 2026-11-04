@@ -1,0 +1,23 @@
+/* ===== The results ceremony: 3-2-1, the answer, the three closest ===== */
+.ceremony { position: relative; align-items: center; justify-content: center; text-align: center; }
+.cer-badge { position: absolute; top: 4px; inset-inline-end: 0; display: inline-flex; align-items: center; gap: 8px; font-size: 18px; color: #fde68a; opacity: 0.8; }
+
+.cer-act { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+.cer-progress { font-size: 22px; color: var(--muted); }
+.cer-question { font-size: min(54px, 4vw); margin: 0; max-width: 1500px; animation: show-in 0.8s ease-out; }
+.cer-question.small { font-size: 34px; color: #cbd5e1; animation: none; }
+
+.cer-count { font-size: min(260px, 26vh); line-height: 1; font-weight: 900; color: #fde68a; text-shadow: 0 0 80px rgba(253, 230, 138, 0.6); animation: count-pop 1s ease-out forwards; }
+@keyframes count-pop { from { transform: scale(1.8); opacity: 0; } 25% { transform: scale(1); opacity: 1; } to { transform: scale(0.85); opacity: 0.2; } }
+
+.cer-final { font-size: min(150px, 9vw, 15vh); line-height: 1; font-weight: 900; color: #6ee7b7; text-shadow: 0 0 70px rgba(110, 231, 183, 0.6); animation: slam 0.55s cubic-bezier(0.2, 1.7, 0.4, 1); }
+
+.cer-top { display: flex; align-items: flex-end; justify-content: center; gap: 56px; margin-top: 10px; }
+.cer-top-face { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 24px; animation: rise 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.3) backwards; animation-delay: calc(0.5s + var(--i) * 0.25s); }
+.cer-top-face.place-1 { order: 2; font-size: 30px; }
+.cer-top-face.place-2 { order: 1; }
+.cer-top-face.place-3 { order: 3; }
+.cer-top-face.place-1 .avatar { box-shadow: 0 0 0 5px #fbbf24, 0 0 60px rgba(251, 191, 36, 0.7); }
+.cer-top-face span:not(.cer-medal) { font-size: 18px; color: var(--muted); }
+.cer-medal { font-size: 40px; }
+.cer-none { font-size: 34px; color: var(--muted); }

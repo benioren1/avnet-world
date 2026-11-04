@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Copy, ExternalLink, Megaphone, RefreshCw, Star, Trash2, Tv, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, Lightbulb, Megaphone, RefreshCw, Star, Trash2, Tv, X } from 'lucide-react';
 import { adminApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 
@@ -91,6 +91,60 @@ function Announcements() {
   );
 }
 
+const FACT_MAX = 140;
+const FACT_IDEAS = [
+  'יש לנו שני אנשים שקוראים להם יעקב בצוות',
+  'הקוד הכי ישן במערכת נכתב ב-',
+  'הצוות שותה ביום בערך ___ כוסות קפה',
+  'מי שהכי הרבה זמן בצוות הוא ',
+];
+
+// "Did you know?" facts about the team. The TV shows them as big slides, between
+// facts the game finds by itself (most popular component, bullseye guesses...).
+function Facts() {
+  const [list, setList] = useState([]);
+  const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  const load = useCallback(() => adminApi.get('/facts').then(setList), []);
+  useEffect(() => { load(); }, [load]);
+
+  const add = (e) => {
+    e.preventDefault();
+    adminApi.post('/facts', { text })
+      .then(() => { setText(''); setError(''); load(); })
+      .catch((err) => setError(err.message));
+  };
+  const remove = (f) => adminApi.del(`/facts/${f.id}`).then(load);
+
+  return (
+    <div className="card">
+      <h3 className="title-with-icon"><Lightbulb size={16} /> הידעת? עובדות על הצוות</h3>
+      <p className="muted small">עובדות משעשעות על הצוות שיקפצו בטלוויזיה כמסך "הידעת?" גדול. המשחק גם מוסיף עובדות משלו מתוך הנתונים (הרכיב הכי פופולרי, ניחושים בול, שמות כפולים בצוות ועוד).</p>
+      <form className="announce-form" onSubmit={add}>
+        <div className="row wrap">
+          {FACT_IDEAS.map((idea) => (
+            <button type="button" key={idea} className="chip-btn" onClick={() => setText(idea)}>{idea.length > 26 ? `${idea.slice(0, 26)}...` : idea}</button>
+          ))}
+        </div>
+        <input maxLength={FACT_MAX} placeholder="למשל: יש לנו שני אנשים שקוראים להם יעקב בצוות" value={text} onChange={(e) => setText(e.target.value)} />
+        <div className="row wrap announce-options">
+          <span className="muted small">{text.length}/{FACT_MAX}</span>
+          <button className="primary" type="submit" disabled={!text.trim()}><Lightbulb size={15} /> הוסף לטלוויזיה</button>
+        </div>
+        {error && <span className="msg-error">{error}</span>}
+      </form>
+      {list.map((f) => (
+        <div className="bonus-row" key={f.id}>
+          <span>💡</span>
+          <div className="bonus-row-main"><b>{f.text}</b></div>
+          <button className="ghost danger icon-btn" onClick={() => remove(f)} aria-label="מחק עובדה"><Trash2 size={15} /></button>
+        </div>
+      ))}
+      {!list.length && <p className="muted small">עוד לא הוספת עובדות.</p>}
+    </div>
+  );
+}
+
 export default function TvPanel({ tvToken, onChange }) {
   const [token, setToken] = useState(tvToken);
   const [billboards, setBillboards] = useState([]);
@@ -139,6 +193,8 @@ export default function TvPanel({ tvToken, onChange }) {
       </div>
 
       <Announcements />
+
+      <Facts />
 
       <div className="card">
         <h3>שלטים שמחכים לאישור {pending.length > 0 && <span className="count-pill">{pending.length}</span>}</h3>

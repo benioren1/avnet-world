@@ -19,6 +19,8 @@ const EARLY_BIRD_TITLE_AT = 10;
 const MINER_TITLE_STREAK = 5;
 const ANNOUNCEMENT_MAX_CHARS = 120;
 const DUEL_KING_MIN_WINS = 3;
+const FACT_MAX_CHARS = 140;
+const STATS_TTL_MS = 5 * 60 * 1000;
 
 export function createSeason2(ctx) {
   const {
@@ -97,6 +99,88 @@ export function createSeason2(ctx) {
       streak: before + (minedToday ? 1 : 0),
       nextAmount: Math.min(s.mineBase + MINE_STREAK_STEP * before, s.mineBase * 2),
     };
+  }
+
+  // ---------- TV hall of fame + automatic "did you know?" ----------
+  // Scans the whole history, so it is refreshed at most every few minutes.
+  let statsCache = { at: 0, value: null };
+  async function teamStats(board, players) {
+    if (statsCache.value && Date.now() - statsCache.at < STATS_TTL_MS) return statsCache.value;
+    const [arch, purchases, guesses, questions, bonuses, allDuels] = await Promise.all([
+      getArchitecture(), db.find('purchases'), db.find('guesses'), db.find('questions'), db.find('bonuses'), db.find('duels'),
+    ]);
+    const name = (id) => players[id]?.name;
+    const face = (id) => ({ id, name: name(id), photo: photoOf(players[id]) });
+    const compName = Object.fromEntries(arch.nodes.map((n) => [n.id, n.data.name]));
+    const records = [];
+    const autoFacts = [];
+    const fact = (id, text) => autoFacts.push({ id: `auto-${id}`, text, auto: true });
+
+    // Most popular component, and how much of the system nobody has built yet.
+    const buyers = {};
+    purchases.forEach((p) => { buyers[p.componentId] = (buyers[p.componentId] || 0) + 1; });
+    const popular = Object.entries(buyers).sort((a, b) => b[1] - a[1])[0];
+    if (popular && compName[popular[0]]) {
+      records.push({ id: 'popular', emoji: '🔥', label: 'הרכיב הכי מבוקש', value: compName[popular[0]], sub: `${popular[1]} שחקנים קנו אותו` });
+    }
+    if (purchases.length) {
+      const spent = purchases.reduce((s, p) => s + (p.price || 0), 0);
+      fact('bought', `הצוות קנה כבר ${purchases.length.toLocaleString()} רכיבים ב-${spent.toLocaleString()} דינרים`);
+      const untouched = arch.nodes.filter((n) => !buyers[n.id]).length;
+      if (untouched) fact('untouched', `${untouched} רכיבים במערכת עוד לא נקנו אף פעם. מי יהיה הראשון?`);
+    }
+    const priciest = purchases.reduce((m, p) => (!m || (p.price || 0) > (m.price || 0) ? p : m), null);
+    if (priciest && compName[priciest.componentId] && name(priciest.playerId)) {
+      records.push({ id: 'priciest', emoji: '💸', label: 'הקנייה הכי יקרה', value: compName[priciest.componentId], sub: `${(priciest.price || 0).toLocaleString()} דינרים`, player: face(priciest.playerId) });
+    }
+
+    // Sharpest single guess on a number question ever.
+    const questionOf = Object.fromEntries(questions.map((q) => [q.id, q]));
+    const isNumber = (g) => (questionOf[g.questionId]?.kind || 'number') === 'number';
+    const sharp = guesses
+      .filter((g) => typeof g.error === 'number' && isNumber(g) && name(g.playerId))
+      .reduce((m, g) => (!m || g.error < m.error ? g : m), null);
+    if (sharp) {
+      records.push({
+        id: 'sharp', emoji: '🎯', label: 'הניחוש הכי מדויק אי פעם', player: face(sharp.playerId),
+        value: sharp.error === 0 ? 'בול!' : `סטייה של ${(sharp.error * 100).toFixed(1)}%`, sub: questionOf[sharp.questionId]?.text,
+      });
+    }
+    if (guesses.length) fact('guesses', `שלחתם עד היום ${guesses.length.toLocaleString()} ניחושים על ${questions.length.toLocaleString()} שאלות`);
+    const bullseyes = guesses.filter((g) => g.error === 0 && isNumber(g)).length;
+    if (bullseyes) fact('bullseye', `${bullseyes} פעמים מישהו ניחש מספר בול בדיוק 🎯`);
+
+    // The most dedicated miner, gold, firefighters, the duel champion.
+    const mineDays = {};
+    bonuses.filter((b) => b.kind === 'mine').forEach((b) => { mineDays[b.playerId] = (mineDays[b.playerId] || 0) + 1; });
+    const miner = Object.entries(mineDays).filter(([id]) => name(id)).sort((a, b) => b[1] - a[1])[0];
+    if (miner) records.push({ id: 'miner', emoji: '⛏️', label: 'הכורה הכי חרוץ', player: face(miner[0]), value: `${miner[1]} בקרים` });
+    const golds = bonuses.filter((b) => b.kind === 'mine' && b.gold).length;
+    if (golds) fact('gold', `נמצאו במכרה ${golds} גושי זהב עד היום 💎`);
+    const fires = bonuses.filter((b) => b.kind === 'incident').length;
+    if (fires) fact('fire', `${fires} פעמים מישהו טיפל בתקלה וקיבל בונוס כבאי 🧯`);
+    const wins = {};
+    allDuels.filter((d) => d.status === 'resolved' && d.winner).forEach((d) => { wins[d.winner] = (wins[d.winner] || 0) + 1; });
+    const champ = Object.entries(wins).filter(([id]) => name(id)).sort((a, b) => b[1] - a[1])[0];
+    if (champ) records.push({ id: 'duels', emoji: '⚔️', label: 'אלוף ההתערבויות', player: face(champ[0]), value: `${champ[1]} ניצחונות` });
+
+    // From the board: the fattest wallet and the best forecaster.
+    const richest = [...board.rows].sort((a, b) => b.balance - a.balance)[0];
+    if (richest?.balance > 0) records.push({ id: 'rich', emoji: '💰', label: 'הארנק הכי שמן', player: face(richest.id), value: `${richest.balance.toLocaleString()} דינרים` });
+    const sage = board.rows.filter((r) => r.accuracy !== null).sort((a, b) => b.accuracy - a.accuracy)[0];
+    if (sage) records.push({ id: 'sage', emoji: '🔮', label: 'החזאי הכי מדויק', player: face(sage.id), value: `${Math.round(sage.accuracy)}% דיוק` });
+
+    // Fun with names: shared first names on the team.
+    const firstNames = {};
+    Object.values(players).filter((p) => p.active !== false).forEach((p) => {
+      const first = String(p.name || '').trim().split(/\s+/)[0];
+      if (first) firstNames[first] = (firstNames[first] || 0) + 1;
+    });
+    Object.entries(firstNames).filter(([, n]) => n > 1)
+      .forEach(([first, n]) => fact(`name-${first}`, `יש בצוות ${n === 2 ? 'שני' : n} אנשים שקוראים להם ${first} 👯`));
+
+    statsCache = { at: Date.now(), value: { records, autoFacts } };
+    return statsCache.value;
   }
 
   // ---------- titles ----------
@@ -487,6 +571,25 @@ export function createSeason2(ctx) {
       res.json({ ok: true });
     }));
 
+    // ===== admin: "did you know?" facts for the TV =====
+    admin.get('/facts', wrap(async (req, res) => {
+      res.json((await db.find('facts')).sort((a, b) => b.at.localeCompare(a.at)));
+    }));
+
+    admin.post('/facts', wrap(async (req, res) => {
+      const text = String(req.body.text || '').trim();
+      if (!text) throw fail(400, 'כתוב את העובדה');
+      if (text.length > FACT_MAX_CHARS) throw fail(400, `עד ${FACT_MAX_CHARS} תווים`);
+      const fact = { id: newId('fa'), text, at: nowIso() };
+      await db.insertOne('facts', fact);
+      res.json(fact);
+    }));
+
+    admin.delete('/facts/:id', wrap(async (req, res) => {
+      await db.deleteMany('facts', { id: req.params.id });
+      res.json({ ok: true });
+    }));
+
     // ===== admin: payout, vote, TV =====
     admin.post('/payout', wrap(async (req, res) => res.json(await runPayout(today()))));
     admin.post('/vote/close', wrap(async (req, res) => res.json(await closeVote(weekKey(today())))));
@@ -508,33 +611,93 @@ export function createSeason2(ctx) {
       const leaderRow = board.rows.find((r) => r.value > 0);
       const leader = leaderRow ? await cityOf(await db.findOne('players', { id: leaderRow.id })) : null;
       const date = today();
+      const players = Object.fromEntries((await db.find('players')).map((p) => [p.id, p]));
+      const face = (id) => ({ id, name: players[id]?.name, photo: photoOf(players[id]) });
+      const active = Object.values(players).filter((p) => p.active !== false);
+
       const questions = (await db.find('questions', { date })).sort((a, b) => a.order - b.order);
       const qs = [];
+      const openLocks = [];
+      const guessedOpen = new Map(active.map((p) => [p.id, 0]));
+      let openCount = 0;
       for (const q of questions) {
+        const guesses = await db.find('guesses', { questionId: q.id });
+        const locked = await ctx.isLocked(q);
+        const lockAt = await ctx.lockAtFor(q);
+        const kind = q.kind || 'number';
+        if (!locked) {
+          openCount += 1;
+          openLocks.push(lockAt);
+          guesses.forEach((g) => { if (guessedOpen.has(g.playerId)) guessedOpen.set(g.playerId, guessedOpen.get(g.playerId) + 1); });
+        }
         qs.push({
-          id: q.id, text: q.text, unit: q.unit, kind: q.kind || 'number', resolved: q.resolved, answer: q.resolved ? q.answer : null,
-          lockTime: (await ctx.lockAtFor(q)).slice(11), locked: await ctx.isLocked(q),
-          guessCount: (await db.find('guesses', { questionId: q.id })).length,
+          id: q.id, text: q.text, unit: q.unit, kind, resolved: q.resolved, answer: q.resolved ? q.answer : null,
+          lockTime: lockAt.slice(11), locked, guessCount: guesses.length,
+          // Only after the lock, so the screen never helps anyone "go against the crowd".
+          split: locked && kind === 'yesno'
+            ? { yes: guesses.filter((g) => g.value === 1).length, no: guesses.filter((g) => g.value === 0).length }
+            : null,
+          // The results ceremony: who nailed it.
+          winners: q.resolved
+            ? guesses.filter((g) => (kind === 'yesno' ? g.value === q.answer : g.closest))
+              .map((g) => ({ ...face(g.playerId), value: g.value }))
+            : [],
+          // Everyone's guess, for the ceremony's number line (only once the answer is public).
+          guesses: q.resolved
+            ? guesses.map((g) => ({ ...face(g.playerId), value: g.value, points: (g.points || 0) + (g.bonus || 0) }))
+            : [],
         });
       }
-      const players = Object.fromEntries((await db.find('players')).map((p) => [p.id, p]));
+
+      // Countdown to the next lock, and who still owes a guess (faces on screen = friendly pressure).
+      let countdown = null;
+      if (openLocks.length) {
+        const next = openLocks.sort()[0];
+        const toMinutes = (s) => Number(s.slice(11, 13)) * 60 + Number(s.slice(14, 16));
+        const now = new Date();
+        const lockInMs = (toMinutes(next) - toMinutes(nowLocal())) * 60000 - now.getSeconds() * 1000 - now.getMilliseconds();
+        countdown = {
+          lockTime: next.slice(11),
+          lockInMs: next.slice(0, 10) === date ? Math.max(0, lockInMs) : null,
+          missing: active.filter((p) => guessedOpen.get(p.id) < openCount).map((p) => face(p.id)),
+        };
+      }
+
+      // Rank movement since the morning: the first TV request of the day takes a snapshot.
+      let snapshot = await getMeta('rankSnapshot', null);
+      if (snapshot?.date !== date) {
+        snapshot = { date, ranks: Object.fromEntries(board.rows.map((r, i) => [r.id, i + 1])) };
+        await setMeta('rankSnapshot', snapshot);
+      }
+      const rankDelta = Object.fromEntries(board.rows.map((r, i) => [r.id, snapshot.ranks[r.id] ? snapshot.ranks[r.id] - (i + 1) : 0]));
+
       const billboards = (await db.find('billboards', { status: 'approved', date }))
         .map((b) => ({ id: b.id, text: b.text, name: players[b.playerId]?.name, photo: photoOf(players[b.playerId]) }));
-      const feed = (await db.find('events')).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 15);
+      const feed = (await db.find('events')).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 15)
+        .map((e) => (e.playerId ? { ...e, name: players[e.playerId]?.name, photo: photoOf(players[e.playerId]) } : e));
       const announcements = (await db.find('announcements')).filter(isActive)
         .sort((a, b) => a.at.localeCompare(b.at))
         .map(({ id, text, featured }) => ({ id, text, featured }));
+      const stats = await teamStats(board, players);
+      const facts = [
+        ...(await db.find('facts')).map(({ id, text }) => ({ id, text })),
+        ...stats.autoFacts,
+      ];
       res.json({
         now: time(),
         announcements,
         duels: await duels.forTv(),
         board,
+        rankDelta,
         architecture: await getArchitecture(),
         leader,
         questions: qs,
+        countdown,
         incidents: await incidentsView(),
         billboards,
         feed,
+        facts,
+        records: stats.records,
         mining: await mineGeneral(),
       });
     }));
