@@ -52,6 +52,30 @@ export function scoreQuestion(guesses, actual) {
   });
 }
 
+// Yes/no questions: guesses and answer are 1 (yes) or 0 (no).
+// A right answer is worth less than a precise number (it's a coin flip at worst),
+// and being right when most of the team was wrong earns a "against the crowd" bonus.
+export const YESNO_POINTS = 50;
+export const CONTRARIAN_BONUS = 30;
+
+export function scoreYesNo(guesses, answer) {
+  const right = guesses.filter((g) => g.value === answer).length;
+  const wrong = guesses.length - right;
+  return guesses.map((g) => {
+    const correct = g.value === answer;
+    const beatCrowd = correct && wrong > right;
+    return {
+      playerId: g.playerId,
+      // error 0/1 keeps perfectDayPlayers working: a right yes/no counts as "within range".
+      error: correct ? 0 : 1,
+      points: correct ? YESNO_POINTS : 0,
+      bonus: beatCrowd ? CONTRARIAN_BONUS : 0,
+      closest: false,
+      beatCrowd,
+    };
+  });
+}
+
 // scoredByQuestion: array (one per question of the day) of scoreQuestion results.
 // A perfect day = the player guessed every question within PERFECT_DAY_ERROR.
 export function perfectDayPlayers(scoredByQuestion) {

@@ -1,6 +1,31 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { perfectDayPlayers, pointsForError, relativeError, scoreQuestion } from './scoring.js';
+import { perfectDayPlayers, pointsForError, relativeError, scoreQuestion, scoreYesNo } from './scoring.js';
+
+test('yes/no: right answer is 50, wrong is 0', () => {
+  const res = scoreYesNo([{ playerId: 'a', value: 1 }, { playerId: 'b', value: 0 }], 1);
+  const by = Object.fromEntries(res.map((r) => [r.playerId, r]));
+  assert.equal(by.a.points, 50);
+  assert.equal(by.b.points, 0);
+  assert.equal(by.a.bonus, 0); // 1 right vs 1 wrong is not "most were wrong"
+});
+
+test('yes/no: being right when most were wrong earns +30', () => {
+  const res = scoreYesNo(
+    [{ playerId: 'a', value: 1 }, { playerId: 'b', value: 0 }, { playerId: 'c', value: 0 }],
+    1,
+  );
+  const a = res.find((r) => r.playerId === 'a');
+  assert.equal(a.points + a.bonus, 80);
+  assert.equal(a.beatCrowd, true);
+  assert.ok(res.filter((r) => r.playerId !== 'a').every((r) => r.points === 0 && r.bonus === 0));
+});
+
+test('yes/no answers count toward a perfect day only when right', () => {
+  const yesno = scoreYesNo([{ playerId: 'a', value: 1 }, { playerId: 'b', value: 0 }], 1);
+  const number = [{ playerId: 'a', error: 0.05 }, { playerId: 'b', error: 0.05 }];
+  assert.deepEqual(perfectDayPlayers([number, yesno]), ['a']);
+});
 
 test('exact and near-exact guesses get full points', () => {
   assert.equal(pointsForError(relativeError(1000, 1000)), 100);

@@ -14,7 +14,7 @@ import path from 'node:path';
 const COLLECTIONS = [
   'meta', 'players', 'questions', 'guesses', 'purchases', 'bonuses', 'events',
   // Season 2
-  'spend', 'incidents', 'billboards', 'votes', 'announcements',
+  'spend', 'incidents', 'billboards', 'votes', 'announcements', 'duels',
 ];
 
 function matches(doc, filter) {

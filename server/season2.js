@@ -18,11 +18,12 @@ const MAX_DECORATIONS = 30;
 const EARLY_BIRD_TITLE_AT = 10;
 const MINER_TITLE_STREAK = 5;
 const ANNOUNCEMENT_MAX_CHARS = 120;
+const DUEL_KING_MIN_WINS = 3;
 
 export function createSeason2(ctx) {
   const {
     db, newId, newToken, nowLocal, today, getMeta, setMeta, getSettings, getArchitecture,
-    addEvent, wallet, wrap, fail, publicPlayer, leaderboard,
+    addEvent, wallet, wrap, fail, publicPlayer, leaderboard, duels,
   } = ctx;
 
   const nowIso = () => new Date().toISOString();
@@ -107,6 +108,10 @@ export function createSeason2(ctx) {
     if (streak >= MINER_TITLE_STREAK) titles.push({ id: 'miner', label: '⛏️ כורה מתמיד' });
     const winner = await getMeta('beautyWinner', null);
     if (winner?.playerId === player.id && today() < addDays(winner.date, 7)) titles.push({ id: 'beauty', label: '🏆 העיר היפה' });
+    // Duel king: most bet wins this month (at least 3).
+    const wins = await duels.winsThisMonth();
+    const top = Math.max(0, ...Object.values(wins));
+    if (top >= DUEL_KING_MIN_WINS && wins[player.id] === top) titles.push({ id: 'duelking', label: '🗡️ מלך ההתערבויות' });
     return titles;
   }
 
@@ -170,6 +175,7 @@ export function createSeason2(ctx) {
   async function tick() {
     const s = await getSettings();
     const date = today();
+    await duels.expireStale(); // unanswered bet invitations get their stake back at the lock time
     if (time() < s.payoutTime) return;
     if (isWorkDay(date, s.workDays)) await runPayout(date);
     if (weekday(date) === s.voteDay) await closeVote(weekKey(date));
@@ -497,7 +503,7 @@ export function createSeason2(ctx) {
       const qs = [];
       for (const q of questions) {
         qs.push({
-          id: q.id, text: q.text, unit: q.unit, resolved: q.resolved, answer: q.resolved ? q.answer : null,
+          id: q.id, text: q.text, unit: q.unit, kind: q.kind || 'number', resolved: q.resolved, answer: q.resolved ? q.answer : null,
           lockTime: (await ctx.lockAtFor(q)).slice(11), locked: await ctx.isLocked(q),
           guessCount: (await db.find('guesses', { questionId: q.id })).length,
         });
@@ -512,6 +518,7 @@ export function createSeason2(ctx) {
       res.json({
         now: time(),
         announcements,
+        duels: await duels.forTv(),
         board,
         architecture: await getArchitecture(),
         leader,

@@ -4,7 +4,8 @@ import path from 'node:path';
 import express from 'express';
 import { createStore } from './store.js';
 import { createSeason2 } from './season2.js';
-import { perfectDayPlayers, scoreQuestion, PERFECT_DAY_BONUS } from './scoring.js';
+import { createDuels } from './duels.js';
+import { perfectDayPlayers, scoreQuestion, scoreYesNo, PERFECT_DAY_BONUS } from './scoring.js';
 import { sampleArchitecture } from '../src/model.js';
 import { autoLayout } from '../src/layout.js';
 
@@ -183,10 +184,13 @@ admin.use(requireAdmin);
 const play = express.Router();
 play.use((req, res, next) => requirePlayer(req, res, next).catch(next));
 
+// Personal bets between two players live in their own module.
+const duels = createDuels({ db, newId, nowLocal, today, getSettings, addEvent, wallet, wrap, fail });
+
 // Season 2 features (mining, incidents, upgrades, cosmetics, TV...) live in their own module.
 const season2 = createSeason2({
   db, newId, newToken, nowLocal, today, getMeta, setMeta, getSettings, getArchitecture,
-  addEvent, wallet, wrap, fail, publicPlayer, isLocked, lockAtFor, leaderboard,
+  addEvent, wallet, wrap, fail, publicPlayer, isLocked, lockAtFor, leaderboard, duels,
 });
 
 // =============== ADMIN ===============
@@ -309,6 +313,7 @@ admin.delete('/bonuses/:id', wrap(async (req, res) => {
 
 admin.delete('/players/:id', wrap(async (req, res) => {
   const playerId = req.params.id;
+  await duels.cleanupPlayer(playerId); // refunds the other side of any open bet first
   for (const c of ['guesses', 'purchases', 'bonuses', 'spend', 'billboards']) await db.deleteMany(c, { playerId });
   await db.deleteMany('votes', { voter: playerId });
   await db.deleteMany('votes', { target: playerId });
@@ -343,14 +348,21 @@ admin.get('/questions', wrap(async (req, res) => {
   res.json({ date, questions: out });
 }));
 
+// kind: 'number' (closest guess wins) or 'yesno' (guesses and answer are 1 = yes, 0 = no).
+const QUESTION_KINDS = ['number', 'yesno'];
+
 admin.post('/questions', wrap(async (req, res) => {
-  const { date = today(), componentId = '', text, unit = '' } = req.body;
+  const { date = today(), componentId = '', text, unit = '', kind = 'number' } = req.body;
   if (!text?.trim()) throw fail(400, 'חסר טקסט לשאלה');
+  if (!QUESTION_KINDS.includes(kind)) throw fail(400, 'סוג שאלה לא תקין');
   if (date < today()) throw fail(400, 'אי אפשר להוסיף שאלה ליום שעבר');
   const existing = await db.find('questions', { date });
   if (existing.length >= MAX_QUESTIONS_PER_DAY) throw fail(400, `מקסימום ${MAX_QUESTIONS_PER_DAY} שאלות ביום`);
   const { lockAt, late } = await newLockAt(date);
-  const q = { id: newId('q'), date, componentId, text: text.trim(), unit, order: existing.length, answer: null, resolved: false, lockAt };
+  const q = {
+    id: newId('q'), date, componentId, text: text.trim(), unit: kind === 'yesno' ? '' : unit, kind,
+    order: existing.length, answer: null, resolved: false, lockAt,
+  };
   await db.insertOne('questions', q);
   res.json({ ...q, late });
 }));
@@ -364,7 +376,7 @@ admin.post('/questions/copy', wrap(async (req, res) => {
   const { lockAt, late } = await newLockAt(to);
   for (const [i, q] of toCopy.entries()) {
     await db.insertOne('questions', {
-      id: newId('q'), date: to, componentId: q.componentId, text: q.text, unit: q.unit,
+      id: newId('q'), date: to, componentId: q.componentId, text: q.text, unit: q.unit, kind: q.kind || 'number',
       order: existing.length + i, answer: null, resolved: false, lockAt,
     });
   }
@@ -407,8 +419,10 @@ admin.post('/days/:date/resolve', wrap(async (req, res) => {
     if (raw === undefined || raw === null || raw === '') continue;
     const answer = Number(raw);
     if (!Number.isFinite(answer)) throw fail(400, `תשובה לא תקינה לשאלה "${q.text}"`);
+    const yesno = q.kind === 'yesno';
+    if (yesno && answer !== 0 && answer !== 1) throw fail(400, `בשאלה "${q.text}" התשובה היא כן או לא`);
     const guesses = await db.find('guesses', { questionId: q.id });
-    for (const s of scoreQuestion(guesses, answer)) {
+    for (const s of (yesno ? scoreYesNo : scoreQuestion)(guesses, answer)) {
       await db.updateOne('guesses', { id: `${q.id}:${s.playerId}` }, {
         points: s.points, bonus: s.bonus, error: s.error, closest: s.closest, beatCrowd: s.beatCrowd,
       });
@@ -448,6 +462,7 @@ admin.post('/days/:date/resolve', wrap(async (req, res) => {
 }));
 
 season2.register({ app, admin, play });
+duels.register({ admin, play });
 app.use('/api/admin', admin);
 
 // =============== PLAYERS ===============
@@ -476,7 +491,10 @@ play.get('/today', wrap(async (req, res) => {
     const locked = await isLocked(q);
     const mine = guesses.find((g) => g.questionId === q.id && g.playerId === req.player.id);
     const lockTime = (await lockAtFor(q)).slice(11);
-    const item = { id: q.id, text: q.text, unit: q.unit, componentId: q.componentId, locked, lockTime, resolved: q.resolved, myGuess: mine || null };
+    const item = {
+      id: q.id, text: q.text, unit: q.unit, kind: q.kind || 'number', componentId: q.componentId,
+      locked, lockTime, resolved: q.resolved, myGuess: mine || null,
+    };
     // Others' guesses stay hidden until the lock, so nobody can copy.
     if (locked) {
       item.guesses = guesses.filter((g) => g.questionId === q.id).map((g) => ({
@@ -504,6 +522,7 @@ play.post('/guesses', wrap(async (req, res) => {
   if (!Number.isFinite(value) || value < 0) throw fail(400, 'ניחוש חייב להיות מספר חיובי');
   const q = await db.findOne('questions', { id: questionId });
   if (!q) throw fail(404, 'שאלה לא נמצאה');
+  if (q.kind === 'yesno' && value !== 0 && value !== 1) throw fail(400, 'בשאלה הזו עונים כן או לא');
   if (q.date !== today()) throw fail(400, 'אפשר לנחש רק על שאלות של היום');
   if (await isLocked(q)) throw fail(400, 'השאלה כבר ננעלה 🔒');
   const id = `${q.id}:${req.player.id}`;
@@ -568,6 +587,7 @@ async function leaderboard() {
       accuracy: scored.length ? scored.reduce((s, g) => s + g.points, 0) / scored.length : null,
       todayPoints: guesses.filter((g) => todayIds.has(g.questionId)).reduce((s, g) => s + (g.points || 0) + (g.bonus || 0), 0) + dayBonus,
       ...(await season2.playerBadges(p)),
+      duelRecord: await duels.record(p.id),
     });
   }
   // Ties (e.g. everyone at 0 on day one) are broken by balance, then by accuracy.
