@@ -647,9 +647,22 @@ play.post('/buy', wrap(async (req, res) => {
   res.json({ ok: true, wallet: w });
 }));
 
-// Shared by the player leaderboard and the office TV screen. Polled by every open tab,
-// so it reads each collection once and groups in memory instead of querying per player.
-async function leaderboard() {
+// Shared by the player leaderboard and the office TV screen. Every open tab polls it and
+// it scans the whole game history, so one result is shared until the data changes or the
+// minute turns (titles and "today" depend on the clock). Concurrent callers share one run.
+let boardCache = { key: null, promise: null };
+function leaderboard() {
+  const key = `${db.version}|${nowLocal()}`;
+  if (boardCache.key !== key) {
+    const promise = computeLeaderboard();
+    boardCache = { key, promise };
+    promise.catch(() => { if (boardCache.promise === promise) boardCache = { key: null, promise: null }; });
+  }
+  return boardCache.promise;
+}
+
+// Reads each collection once and groups in memory instead of querying per player.
+async function computeLeaderboard() {
   const arch = await getArchitecture();
   const totalComponents = arch.nodes.length;
   const players = (await db.find('players')).filter((p) => p.active !== false);

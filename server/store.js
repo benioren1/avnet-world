@@ -122,9 +122,25 @@ async function createMongoStore(url, dbName) {
   };
 }
 
+// Counts writes, so heavy read-only results (the leaderboard) can be cached until
+// something changes. Valid because the server runs as a single process.
+function withVersion(store) {
+  let version = 0;
+  const counted = (fn) => async (...args) => {
+    try { return await fn(...args); } finally { version += 1; }
+  };
+  return {
+    ...store,
+    insertOne: counted(store.insertOne),
+    updateOne: counted(store.updateOne),
+    deleteMany: counted(store.deleteMany),
+    get version() { return version; },
+  };
+}
+
 export async function createStore() {
   if (process.env.MONGO_URL) {
-    return createMongoStore(process.env.MONGO_URL, process.env.MONGO_DB || 'architecture_game');
+    return withVersion(await createMongoStore(process.env.MONGO_URL, process.env.MONGO_DB || 'architecture_game'));
   }
-  return createFileStore(process.env.DATA_FILE || path.resolve('data', 'db.json'));
+  return withVersion(createFileStore(process.env.DATA_FILE || path.resolve('data', 'db.json')));
 }
