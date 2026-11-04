@@ -107,10 +107,6 @@ button.upgrade-btn:hover:not(:disabled) { background: linear-gradient(135deg, #f
   display: flex; gap: 8px; align-items: flex-start; padding: 10px; border-radius: 10px;
   background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; font-size: 13px;
 }
-  position: absolute; top: -20px; left: var(--x); width: 2px; height: 18px;
-  background: linear-gradient(transparent, rgba(160, 200, 255, 0.8));
-  animation: rain var(--d) linear var(--delay) infinite;
-}
 .flow-dot { fill: var(--particle, #b9ffe9); filter: drop-shadow(0 0 4px var(--particle, #2dd4a0)); }
 .flow-line { stroke: var(--particle, var(--success)) !important; }
 .flow-glow { stroke: var(--particle, var(--success)); }
