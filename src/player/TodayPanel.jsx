@@ -1,8 +1,37 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Box, Clock, Coffee, Sparkles, Sun, Target } from 'lucide-react';
+import { Bird, Box, Clock, Coffee, HelpCircle, Sparkles, Sun, Target } from 'lucide-react';
 import { playerApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 import { Coin } from '../icons.jsx';
+
+// "84 accuracy + 20 closest + 10 beat the crowd + 10 early", so nobody wonders why they got 124.
+function Breakdown({ g, earlyBonus }) {
+  if (typeof g.points !== 'number') return null;
+  return (
+    <span className="breakdown">
+      <span>🎯 {g.points} דיוק</span>
+      {g.closest && <span>+20 הכי קרוב</span>}
+      {g.beatCrowd && <span>+10 ניצחת את הקהל</span>}
+      {g.early && earlyBonus > 0 && <span>+{earlyBonus} מוקדם 🐦</span>}
+    </span>
+  );
+}
+
+function HowItWorks({ data }) {
+  return (
+    <details className="card how-it-works">
+      <summary><HelpCircle size={15} /> איך מחשבים את הנקודות?</summary>
+      <ul>
+        <li>מנחשים מספר אמיתי מהמערכת. ככל שקרובים יותר, מקבלים יותר: עד 2% סטייה = 100, 10% = 80, 25% = 50, 50% = 20.</li>
+        <li><b>+20</b> למי שהכי קרוב בשאלה, <b>+10</b> למי שקרוב יותר מהממוצע של הצוות.</li>
+        <li><b>+50</b> ליום מושלם: כל השאלות בטווח של 10%.</li>
+        {data.earlyBonus > 0 && <li><b>+{data.earlyBonus}</b> על כל ניחוש לפני {data.earlyTime} 🐦</li>}
+        <li>הניחושים של כולם נחשפים בשעת הנעילה, והתשובה האמיתית בסוף היום.</li>
+        <li>בדינרים קונים רכיבים אמיתיים של המערכת, משדרגים אותם ומעצבים את העיר בסטודיו.</li>
+      </ul>
+    </details>
+  );
+}
 
 function GuessForm({ q, onSubmit }) {
   const [value, setValue] = useState('');
@@ -22,7 +51,7 @@ function GuessForm({ q, onSubmit }) {
 }
 
 // Shows everyone's guesses on a number line, with the real answer once published.
-function Distribution({ q, meId }) {
+function Distribution({ q, meId, earlyBonus }) {
   const values = q.guesses.map((g) => g.value).concat(q.answer ?? []);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -49,7 +78,11 @@ function Distribution({ q, meId }) {
             {q.resolved && i === 0 && '🥇 '}
             <Avatar name={g.name} photo={g.photo} size={22} />
             {g.name}: <b>{g.value.toLocaleString()}</b>
-            {typeof g.points === 'number' && <span className="pts">+{g.points + (g.bonus || 0)}</span>}
+            {typeof g.points === 'number' && (
+              <span className="pts" title={`${g.points} דיוק${g.closest ? ' + 20 הכי קרוב' : ''}${g.beatCrowd ? ' + 10 ניצחת את הקהל' : ''}${g.early ? ` + ${earlyBonus} מוקדם` : ''}`}>
+                +{g.points + (g.bonus || 0) + (g.early ? earlyBonus : 0)}
+              </span>
+            )}
           </span>
         ))}
       </div>
@@ -64,9 +97,11 @@ export default function TodayPanel({ architecture, meId, onChange, notify }) {
   const load = useCallback(() => playerApi.get('/today').then(setData), []);
   useEffect(() => { load(); }, [load]);
 
+  // On any error (e.g. the question just locked) reload, so the form doesn't stay on screen.
   const guess = (q, value) => playerApi.post('/guesses', { questionId: q.id, value })
-    .then(() => { notify('🎯 הניחוש ננעל! בהצלחה'); load(); })
-    .catch((e) => notify(`❌ ${e.message}`));
+    .then((res) => { notify(res.early ? `🎯 הניחוש ננעל! +${res.earlyBonus} ציפור מוקדמת 🐦` : '🎯 הניחוש ננעל! בהצלחה'); })
+    .catch((e) => notify(`❌ ${e.message}`))
+    .finally(load);
 
   if (!data) return <div className="muted pad">טוען...</div>;
 
@@ -75,6 +110,7 @@ export default function TodayPanel({ architecture, meId, onChange, notify }) {
   const open = data.questions.filter((q) => !q.locked);
   const nextLock = open.length ? open.map((q) => q.lockTime).sort()[0] : null;
   const answered = data.questions.filter((q) => q.myGuess).length;
+  const earlyOpen = data.earlyBonus > 0 && data.now < data.earlyTime && open.some((q) => !q.myGuess);
 
   return (
     <div className="page-panel narrow">
@@ -86,12 +122,20 @@ export default function TodayPanel({ architecture, meId, onChange, notify }) {
         {nextLock && <span className="lock-pill"><Clock size={13} /> ננעל ב-{nextLock}</span>}
       </div>
 
-      {anyResolved && (
-        <div className="card day-summary">
-          <Sparkles size={18} className="warn" /> הרווחת היום <Coin value={myTotal} size={16} />
-          {data.dayBonus > 0 && <span className="muted small">(כולל בונוס יום מושלם 🎯)</span>}
+      {earlyOpen && (
+        <div className="card early-banner">
+          <Bird size={18} /> נחש לפני <b>{data.earlyTime}</b> וקבל <b>+{data.earlyBonus}</b> על כל שאלה
         </div>
       )}
+
+      {anyResolved && (
+        <div className="card day-summary">
+          <Sparkles size={18} className="warn" /> הרווחת היום מתחזיות <Coin value={myTotal} size={16} />
+          {data.dayBonus > 0 && <span className="muted small">(כולל בונוסים של ציפור מוקדמת ויום מושלם)</span>}
+        </div>
+      )}
+
+      <HowItWorks data={data} />
 
       {!data.questions.length && (
         <div className="card empty-state">
@@ -113,16 +157,25 @@ export default function TodayPanel({ architecture, meId, onChange, notify }) {
           {!q.myGuess && !q.locked && <GuessForm q={q} onSubmit={(v) => guess(q, v).then(onChange)} />}
           {!q.myGuess && q.locked && <p className="muted">⏰ פספסת את השאלה הזו</p>}
           {q.myGuess && (
-            <p className="my-guess">
+            <div className="my-guess">
               הניחוש שלך: <b>{q.myGuess.value.toLocaleString()}</b> {q.unit}
+              {q.myGuess.early && typeof q.myGuess.points !== 'number' && <span className="early-chip">🐦 +{data.earlyBonus}</span>}
               {typeof q.myGuess.points === 'number' && (
-                <span className="pts big">+<Coin value={q.myGuess.points + (q.myGuess.bonus || 0)} size={14} /></span>
+                <>
+                  <span className="pts big">+<Coin value={q.myGuess.points + (q.myGuess.bonus || 0) + (q.myGuess.early ? data.earlyBonus : 0)} size={14} /></span>
+                  <Breakdown g={q.myGuess} earlyBonus={data.earlyBonus} />
+                </>
               )}
-            </p>
+            </div>
           )}
 
-          {!q.locked && <p className="muted small">{q.guessCount} אנשים כבר ניחשו. הניחושים ייחשפו ב-{q.lockTime}</p>}
-          {q.locked && q.guesses?.length > 0 && <Distribution q={q} meId={meId} />}
+          {!q.locked && (
+            <p className="muted small">
+              {q.guessCount === 0 ? 'עוד אף אחד לא ניחש. תהיה הראשון!' : q.guessCount === 1 ? 'ניחש אחד עד עכשיו.' : `${q.guessCount} אנשים כבר ניחשו.`}
+              {' '}הניחושים ייחשפו ב-{q.lockTime}
+            </p>
+          )}
+          {q.locked && q.guesses?.length > 0 && <Distribution q={q} meId={meId} earlyBonus={data.earlyBonus} />}
           {q.locked && !q.resolved && <p className="muted small">⏳ מחכים לתשובה האמיתית בסוף היום...</p>}
         </div>
       ))}

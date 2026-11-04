@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import AdminApp from './admin/AdminApp.jsx';
 import PlayerApp from './player/PlayerApp.jsx';
+import TvApp from './tv/TvApp.jsx';
 import { storeToken } from './api.js';
 import '@fontsource/rubik/400.css';
 import '@fontsource/rubik/500.css';
@@ -9,6 +10,7 @@ import '@fontsource/rubik/600.css';
 import '@fontsource/rubik/700.css';
 import './styles.css';
 import './app.css';
+import './season2.css';
 
 // Hash routes: #/admin?key=TOKEN and #/play?t=TOKEN.
 // The token is stored, then removed from the address bar.
@@ -23,6 +25,10 @@ function parseRoute() {
     storeToken('player', params.get('t'));
     window.history.replaceState(null, '', '#/play');
   }
+  if (path === '/tv' && params.get('k')) {
+    storeToken('tv', params.get('k'));
+    window.history.replaceState(null, '', '#/tv');
+  }
   return path || '/play';
 }
 
@@ -33,7 +39,9 @@ function Root() {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-  return route === '/admin' ? <AdminApp /> : <PlayerApp key={route} />;
+  if (route === '/admin') return <AdminApp />;
+  if (route === '/tv') return <TvApp />;
+  return <PlayerApp key={route} />;
 }
 
 createRoot(document.getElementById('root')).render(

@@ -5,16 +5,23 @@ import PlayersPanel from './PlayersPanel.jsx';
 import QuestionsPanel from './QuestionsPanel.jsx';
 import SettingsPanel from './SettingsPanel.jsx';
 import Avatar from '../Avatar.jsx';
-import { Building2, Gamepad2, Gift, LogOut, Network, Settings, ShieldCheck, Sun, Users } from 'lucide-react';
+import { Building2, Gamepad2, Gift, LogOut, Network, Settings, ShieldCheck, Siren, Sun, Tv, Users } from 'lucide-react';
 import BonusPanel from './BonusPanel.jsx';
+import IncidentsPanel from './IncidentsPanel.jsx';
+import TvPanel from './TvPanel.jsx';
 
 const SECTIONS = [
   ['questions', 'שאלות ותשובות', Sun],
+  ['incidents', 'תקלות', Siren],
   ['architecture', 'ארכיטקטורה', Network],
   ['players', 'שחקנים', Users],
   ['bonus', 'בונוסים', Gift],
+  ['tv', 'טלוויזיה ושלטים', Tv],
   ['settings', 'הגדרות', Settings],
 ];
+
+// Small red counters on tabs that need the admin's attention.
+const badgeFor = (key, state) => ({ incidents: state.openIncidents, tv: state.pendingBillboards }[key] || 0);
 
 function AdminLogin({ onLogin, error }) {
   const [code, setCode] = useState('');
@@ -140,8 +147,9 @@ export default function AdminApp() {
         </div>
         <nav className="tabs main-tabs">
           {SECTIONS.map(([key, label, Icon]) => (
-            <button key={key} className={section === key ? 'active' : ''} onClick={() => setSection(key)}>
+            <button key={key} className={section === key ? 'active' : ''} onClick={() => { setSection(key); load(); }}>
               <Icon size={16} /> {label}
+              {badgeFor(key, state) > 0 && <span className="tab-badge">{badgeFor(key, state)}</span>}
             </button>
           ))}
         </nav>
@@ -162,6 +170,8 @@ export default function AdminApp() {
       {section === 'players' && <PlayersPanel players={state.players} onChange={load} />}
       {section === 'questions' && <QuestionsPanel architecture={state.architecture} players={state.players} today={state.today} />}
       {section === 'bonus' && <BonusPanel players={state.players} />}
+      {section === 'incidents' && <IncidentsPanel architecture={state.architecture} players={state.players} settings={state.settings} onChange={load} />}
+      {section === 'tv' && <TvPanel tvToken={state.tvToken} onChange={load} />}
       {section === 'settings' &&<SettingsPanel settings={state.settings} store={state.store} onChange={load} />}
       {joining && <JoinGameDialog players={state.players} onClose={() => setJoining(false)} />}
     </div>

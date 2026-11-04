@@ -6,12 +6,19 @@ function colorFor(name = '') {
   return COLORS[h % COLORS.length];
 }
 
-export default function Avatar({ name, photo, size = 36, crown = false }) {
+// frame: cosmetic border bought in the studio ('none' | 'neon' | 'fire' | 'gold').
+// prank: a friend's prank shown on top of the picture ('hat' | 'mustache').
+export default function Avatar({ name, photo, size = 36, crown = false, frame = 'none', prank = null }) {
   const initials = (name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('');
   return (
-    <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.4, '--av': colorFor(name) }}>
+    <span
+      className={`avatar${frame && frame !== 'none' ? ` frame-${frame}` : ''}`}
+      style={{ width: size, height: size, fontSize: size * 0.4, '--av': colorFor(name) }}
+    >
       {photo ? <img src={photo} alt={name} /> : initials}
       {crown && <span className="crown" style={{ fontSize: size * 0.5 }}>👑</span>}
+      {prank === 'hat' && <span className="prank-hat" style={{ fontSize: size * 0.62 }}>🎩</span>}
+      {prank === 'mustache' && <span className="prank-mustache" style={{ fontSize: size * 0.5 }}>〰️</span>}
     </span>
   );
 }

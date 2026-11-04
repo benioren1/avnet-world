@@ -1,7 +1,8 @@
 // Thin fetch wrapper. Tokens arrive once in the link (#/admin?key=..., #/play?t=...)
 // and are then kept in localStorage so the link can be bookmarked without them.
 
-const KEYS = { admin: 'admin-token', player: 'player-token' };
+const KEYS = { admin: 'admin-token', player: 'player-token', tv: 'tv-token' };
+const HEADERS = { admin: 'x-admin-token', player: 'x-player-token', tv: 'x-tv-token' };
 
 export function readToken(kind) {
   try { return localStorage.getItem(KEYS[kind]) || ''; } catch { return ''; }
@@ -17,7 +18,7 @@ export function clearToken(kind) {
 
 async function request(kind, method, url, body) {
   const headers = { 'content-type': 'application/json' };
-  headers[kind === 'admin' ? 'x-admin-token' : 'x-player-token'] = readToken(kind);
+  headers[HEADERS[kind]] = readToken(kind);
   const res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error || `שגיאה ${res.status}`), { status: res.status });
@@ -34,6 +35,7 @@ const client = (kind, prefix) => ({
 
 export const adminApi = client('admin', '/api/admin');
 export const playerApi = client('player', '/api');
+export const tvApi = client('tv', '/api/tv');
 
 // Shrinks an uploaded photo to a small square JPEG data URL before sending it.
 export function resizePhoto(file, size = 256) {
