@@ -8,6 +8,7 @@ import {
   AlertTriangle, CheckCircle2, FolderOpen, Map as MapIcon, Palette, Plus, Redo2, Save, Table2, Trash2, Undo2, Wand2,
 } from 'lucide-react';
 import { Coin } from '../icons.jsx';
+import { adminApi } from '../api.js';
 
 import ComponentNode, { EditorContext } from '../ComponentNode.jsx';
 import Inspector from './Inspector.jsx';
@@ -78,12 +79,15 @@ function Editor({ initial, onPersist, purchaseCounts = {} }) {
   }, []);
 
   // Removing a component that players bought refunds them on save, and undo can't give it back.
-  const confirmRemoval = useCallback((ids) => {
-    const bought = ids.filter((id) => purchaseCounts[id]);
+  // Counts are fetched fresh: players may have bought it after this panel was opened.
+  const confirmRemoval = useCallback(async (ids) => {
+    if (!ids.length) return true;
+    const counts = await adminApi.get('/purchase-counts').catch(() => purchaseCounts);
+    const bought = ids.filter((id) => counts[id]);
     if (!bought.length) return true;
     const names = bought.map((id) => {
       const n = stateRef.current.nodes.find((x) => x.id === id);
-      return `• ${n?.data.name || id}: ${purchaseCounts[id]} שחקנים`;
+      return `• ${n?.data.name || id}: ${counts[id]} שחקנים`;
     }).join('\n');
     return window.confirm(
       `שחקנים כבר קנו את הרכיבים האלה:\n${names}\n\n`
@@ -133,7 +137,7 @@ function Editor({ initial, onPersist, purchaseCounts = {} }) {
   const onNodesChange = useCallback((changes) => setNodes((ns) => applyNodeChanges(changes, ns)), []);
   const onEdgesChange = useCallback((changes) => setEdges((es) => applyEdgeChanges(changes, es)), []);
   const onBeforeDelete = useCallback(async ({ nodes: doomed }) => {
-    if (!confirmRemoval(doomed.map((n) => n.id))) return false;
+    if (!(await confirmRemoval(doomed.map((n) => n.id)))) return false;
     snapshot();
     return true;
   }, [snapshot, confirmRemoval]);
@@ -178,8 +182,8 @@ function Editor({ initial, onPersist, purchaseCounts = {} }) {
     setEdges((es) => es.map((e) => (e.id === id ? { ...e, ...patch } : e)));
   }, []);
 
-  const deleteNode = useCallback((id) => {
-    if (!confirmRemoval([id])) return;
+  const deleteNode = useCallback(async (id) => {
+    if (!(await confirmRemoval([id]))) return;
     snapshot();
     setNodes((ns) => ns.filter((n) => n.id !== id));
     setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
@@ -236,7 +240,7 @@ function Editor({ initial, onPersist, purchaseCounts = {} }) {
     try {
       const arch = JSON.parse(await file.text());
       if (!Array.isArray(arch.nodes)) throw new Error('קובץ לא תקין');
-      if (!confirmRemoval(missingFrom(arch.nodes))) return;
+      if (!(await confirmRemoval(missingFrom(arch.nodes)))) return;
       snapshot();
       restore({ domains: arch.domains || [], nodes: arch.nodes, edges: arch.edges || [] });
       setTimeout(() => fitView({ duration: 500, padding: 0.15 }), 80);
@@ -248,18 +252,18 @@ function Editor({ initial, onPersist, purchaseCounts = {} }) {
 
   const exportJson = () => download(`architecture-${today()}.json`, JSON.stringify(getCurrent(), null, 2), 'application/json');
 
-  const loadSample = () => {
+  const loadSample = async () => {
     const sample = withLayout(sampleArchitecture());
-    if (!confirmRemoval(missingFrom(sample.nodes))) return;
+    if (!(await confirmRemoval(missingFrom(sample.nodes)))) return;
     snapshot();
     restore(sample);
     setTimeout(() => fitView({ duration: 500 }), 80);
     notify('נטענה ארכיטקטורת דוגמה. אפשר לבטל עם Ctrl+Z');
   };
 
-  const clearAll = () => {
+  const clearAll = async () => {
     if (!window.confirm('למחוק את כל הרכיבים והחיבורים? (אפשר לבטל עם Ctrl+Z)')) return;
-    if (!confirmRemoval(missingFrom([]))) return;
+    if (!(await confirmRemoval(missingFrom([])))) return;
     snapshot();
     restore({ domains, nodes: [], edges: [] });
   };

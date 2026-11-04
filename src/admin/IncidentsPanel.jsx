@@ -126,7 +126,7 @@ export default function IncidentsPanel({ architecture, players, settings, onChan
                 <b>{i.componentNames.join(', ')}</b>
                 <span className="muted small">{i.description} · {formatWhen(i.openedAt)} עד {formatWhen(i.closedAt)}</span>
               </div>
-              {i.handlerId && <span className="small">🧯 {nameOf[i.handlerId]?.name} <Coin value={i.bonus} size={12} /></span>}
+              {i.handlerId && <span className="small">🧯 {nameOf[i.handlerId]?.name || 'שחקן שנמחק'} <Coin value={i.bonus} size={12} /></span>}
             </div>
           ))}
         </div>

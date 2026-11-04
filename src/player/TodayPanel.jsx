@@ -138,12 +138,14 @@ function Distribution({ q, meId, earlyBonus }) {
   );
 }
 
-export default function TodayPanel({ architecture, meId, onChange, notify }) {
+// refreshKey changes on every auto-refresh: reload the data, but keep the component (and any
+// half-typed guess) mounted.
+export default function TodayPanel({ architecture, meId, onChange, notify, refreshKey }) {
   const [data, setData] = useState(null);
   const nodeName = (id) => architecture.nodes.find((n) => n.id === id)?.data.name;
 
   const load = useCallback(() => playerApi.get('/today').then(setData), []);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   // On any error (e.g. the question just locked) reload, so the form doesn't stay on screen.
   const guess = (q, value) => playerApi.post('/guesses', { questionId: q.id, value })

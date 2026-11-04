@@ -23,7 +23,7 @@ const DUEL_KING_MIN_WINS = 3;
 export function createSeason2(ctx) {
   const {
     db, newId, newToken, nowLocal, today, getMeta, setMeta, getSettings, getArchitecture,
-    addEvent, wallet, wrap, fail, publicPlayer, leaderboard, duels,
+    addEvent, wallet, wrap, fail, publicPlayer, leaderboard, duels, withLock, photoOf,
   } = ctx;
 
   const nowIso = () => new Date().toISOString();
@@ -33,16 +33,19 @@ export function createSeason2(ctx) {
   // ---------- spending ----------
   // Charges the player for a non-component item. A fixed id makes one-off items
   // (a theme, an upgrade level) impossible to buy twice even with a double click.
-  async function charge(player, { kind, ref = '', price, id = newId('s'), extra = {} }) {
-    const w = await wallet(player.id);
-    if (w.balance < price) throw fail(400, `חסרים לך ${price - w.balance} דינרים`);
-    try {
-      await db.insertOne('spend', { id, playerId: player.id, kind, ref, price, date: today(), at: nowIso(), ...extra });
-    } catch (e) {
-      if (e.code === 'DUPLICATE') throw fail(400, 'כבר קנית את זה');
-      throw e;
-    }
-    return id;
+  // Serialized per player (withLock), so two quick purchases can't both pass the balance check.
+  function charge(player, { kind, ref = '', price, id = newId('s'), extra = {} }) {
+    return withLock(player.id, async () => {
+      const w = await wallet(player.id);
+      if (w.balance < price) throw fail(400, `חסרים לך ${price - w.balance} דינרים`);
+      try {
+        await db.insertOne('spend', { id, playerId: player.id, kind, ref, price, date: today(), at: nowIso(), ...extra });
+      } catch (e) {
+        if (e.code === 'DUPLICATE') throw fail(400, 'כבר קנית את זה');
+        throw e;
+      }
+      return id;
+    });
   }
 
   const ownedUnlockables = (spends) => new Set(spends.filter((s) => s.kind === 'cosmetic').map((s) => s.ref));
@@ -69,7 +72,7 @@ export function createSeason2(ctx) {
     let firstMiner = null;
     if (mines.length) {
       const p = await db.findOne('players', { id: mines[0].playerId });
-      firstMiner = { name: p?.name, photo: p?.photo, time: mines[0].time };
+      firstMiner = { name: p?.name, photo: photoOf(p), time: mines[0].time };
     }
     return {
       workday,
@@ -97,21 +100,22 @@ export function createSeason2(ctx) {
   }
 
   // ---------- titles ----------
-  async function titlesFor(player) {
-    const bonuses = await db.find('bonuses', { playerId: player.id });
-    const s = await getSettings();
+  // What every player's titles depend on, loaded once (the leaderboard needs all players).
+  async function badgeContext() {
+    const [settings, beautyWinner, wins] = await Promise.all([getSettings(), getMeta('beautyWinner', null), duels.winsThisMonth()]);
+    return { settings, beautyWinner, wins, topWins: Math.max(0, ...Object.values(wins)) };
+  }
+
+  function titlesFor(player, bonuses, { settings, beautyWinner, wins, topWins }) {
     const titles = [];
     if (bonuses.some((b) => b.kind === 'incident')) titles.push({ id: 'firefighter', label: '🧯 כבאי' });
     if (bonuses.filter((b) => b.kind === 'early').length >= EARLY_BIRD_TITLE_AT) titles.push({ id: 'earlybird', label: '🐦 ציפור מוקדמת' });
     const mineDates = new Set(bonuses.filter((b) => b.kind === 'mine').map((b) => b.date));
-    const streak = streakBefore(today(), mineDates, s.workDays) + (mineDates.has(today()) ? 1 : 0);
+    const streak = streakBefore(today(), mineDates, settings.workDays) + (mineDates.has(today()) ? 1 : 0);
     if (streak >= MINER_TITLE_STREAK) titles.push({ id: 'miner', label: '⛏️ כורה מתמיד' });
-    const winner = await getMeta('beautyWinner', null);
-    if (winner?.playerId === player.id && today() < addDays(winner.date, 7)) titles.push({ id: 'beauty', label: '🏆 העיר היפה' });
+    if (beautyWinner?.playerId === player.id && today() < addDays(beautyWinner.date, 7)) titles.push({ id: 'beauty', label: '🏆 העיר היפה' });
     // Duel king: most bet wins this month (at least 3).
-    const wins = await duels.winsThisMonth();
-    const top = Math.max(0, ...Object.values(wins));
-    if (top >= DUEL_KING_MIN_WINS && wins[player.id] === top) titles.push({ id: 'duelking', label: '🗡️ מלך ההתערבויות' });
+    if (topWins >= DUEL_KING_MIN_WINS && wins[player.id] === topWins) titles.push({ id: 'duelking', label: '🗡️ מלך ההתערבויות' });
     return titles;
   }
 
@@ -195,21 +199,23 @@ export function createSeason2(ctx) {
     };
   }
 
-  async function playerBadges(player) {
+  function playerBadges(player, bonuses, badgeCtx) {
     const profile = profileOf(player);
-    return { titles: await titlesFor(player), frame: profile.frame, cityName: profile.cityName };
+    return { titles: titlesFor(player, bonuses, badgeCtx), frame: profile.frame, cityName: profile.cityName };
   }
 
   async function meExtras(player) {
     const s = await getSettings();
-    const spends = await db.find('spend', { playerId: player.id });
+    const [spends, bonuses, badgeCtx] = await Promise.all([
+      db.find('spend', { playerId: player.id }), db.find('bonuses', { playerId: player.id }), badgeContext(),
+    ]);
     return {
       profile: profileOf(player),
       unlocked: [...ownedUnlockables(spends)],
       decorations: await decorationsOf(player.id),
       mining: await miningStatus(player),
       incidents: await incidentsView(),
-      titles: await titlesFor(player),
+      titles: titlesFor(player, bonuses, badgeCtx),
       vote: await voteState(player),
       rules: { earlyTime: s.earlyTime, earlyBonus: s.earlyBonus, incomeRate: s.incomeRate, payoutTime: s.payoutTime },
       catalog: catalog(),
@@ -243,7 +249,10 @@ export function createSeason2(ctx) {
   // ---------- routes ----------
   function register({ app, admin, play }) {
     // ===== mining =====
-    play.post('/mine', wrap(async (req, res) => {
+    // One global queue for mining, so "first miner of the day" is decided exactly once.
+    play.post('/mine', wrap((req, res) => withLock('mine', () => mine(req, res))));
+
+    async function mine(req, res) {
       const s = await getSettings();
       const date = today();
       const t = time();
@@ -270,7 +279,7 @@ export function createSeason2(ctx) {
       if (first) await addEvent('mine', `⛏️ ${req.player.name} פתח/ה את המכרה ב-${t}`, req.player.id);
       if (gold) await addEvent('gold', `💎 ${req.player.name} מצא/ה גוש זהב במכרה! +${GOLD_NUGGET} דינרים`, req.player.id);
       res.json({ amount, gold, first, streak });
-    }));
+    }
 
     // ===== upgrades =====
     play.post('/upgrade', wrap(async (req, res) => {
@@ -423,7 +432,7 @@ export function createSeason2(ctx) {
     admin.get('/billboards', wrap(async (req, res) => {
       const players = Object.fromEntries((await db.find('players')).map((p) => [p.id, p]));
       const list = (await db.find('billboards')).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 50);
-      res.json(list.map((b) => ({ ...b, playerName: players[b.playerId]?.name, playerPhoto: players[b.playerId]?.photo })));
+      res.json(list.map((b) => ({ ...b, playerName: players[b.playerId]?.name, playerPhoto: photoOf(players[b.playerId]) })));
     }));
 
     admin.post('/billboards/:id/approve', wrap(async (req, res) => {
@@ -510,7 +519,7 @@ export function createSeason2(ctx) {
       }
       const players = Object.fromEntries((await db.find('players')).map((p) => [p.id, p]));
       const billboards = (await db.find('billboards', { status: 'approved', date }))
-        .map((b) => ({ id: b.id, text: b.text, name: players[b.playerId]?.name, photo: players[b.playerId]?.photo }));
+        .map((b) => ({ id: b.id, text: b.text, name: players[b.playerId]?.name, photo: photoOf(players[b.playerId]) }));
       const feed = (await db.find('events')).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 15);
       const announcements = (await db.find('announcements')).filter(isActive)
         .sort((a, b) => a.at.localeCompare(b.at))
@@ -538,5 +547,5 @@ export function createSeason2(ctx) {
     timer = setInterval(() => tick().catch((e) => console.error('season2 job failed:', e)), 60 * 1000);
   }
 
-  return { register, startJobs, cityOf, playerBadges, meExtras, adminExtras, runPayout, closeVote };
+  return { register, startJobs, cityOf, playerBadges, badgeContext, meExtras, adminExtras, runPayout, closeVote };
 }

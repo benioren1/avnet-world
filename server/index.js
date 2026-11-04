@@ -5,7 +5,7 @@ import express from 'express';
 import { createStore } from './store.js';
 import { createSeason2 } from './season2.js';
 import { createDuels } from './duels.js';
-import { perfectDayPlayers, scoreQuestion, scoreYesNo, PERFECT_DAY_BONUS } from './scoring.js';
+import { perfectDayPlayers, scoreQuestion, scoreYesNo, PERFECT_DAY_BONUS, YESNO_POINTS } from './scoring.js';
 import { sampleArchitecture } from '../src/model.js';
 import { autoLayout } from '../src/layout.js';
 
@@ -88,19 +88,35 @@ async function addEvent(type, text, playerId = null, extra = {}) {
   await db.insertOne('events', { id: newId('ev'), at: new Date().toISOString(), type, text, playerId, ...extra });
 }
 
-const publicPlayer = ({ token, ...p }) => p;
+// Runs fn only after every earlier fn queued under the same key has finished.
+// Money moves are "check balance, then insert", so without this two quick clicks
+// both pass the check and the player goes negative. Single-process server, so an
+// in-memory queue is enough.
+const locks = new Map();
+function withLock(key, fn) {
+  const run = (locks.get(key) || Promise.resolve()).then(fn, fn);
+  const tail = run.catch(() => {});
+  locks.set(key, tail);
+  tail.then(() => { if (locks.get(key) === tail) locks.delete(key); });
+  return run;
+}
+
+// Strict number parsing for user input: '' and null are "missing", not 0.
+function toNumber(raw) {
+  if (raw === '' || raw === null || raw === undefined || typeof raw === 'boolean') return NaN;
+  return Number(raw);
+}
+
+// Photos are served from their own cacheable URL instead of being inlined as data URLs
+// in every polled response (which multiplied payloads by the number of players).
+const photoOf = (p) => (p?.photo ? `/api/photo/${p.id}?v=${p.photoV || 0}` : '');
+const publicPlayer = ({ token, ...p }) => ({ ...p, photo: photoOf(p) });
 
 // Balance is derived (earned - spent), so re-scoring a day never double-counts.
 // Spending is split in two: components (purchases) and everything else (the "spend"
 // collection: upgrades, cosmetics, billboards). Only components and their
 // upgrades count toward the city's value on the leaderboard.
-async function wallet(playerId) {
-  const [guesses, bonuses, purchases, spends] = await Promise.all([
-    db.find('guesses', { playerId }),
-    db.find('bonuses', { playerId }),
-    db.find('purchases', { playerId }),
-    db.find('spend', { playerId }),
-  ]);
+function computeWallet(guesses, bonuses, purchases, spends) {
   const earned = guesses.reduce((s, g) => s + (g.points || 0) + (g.bonus || 0), 0)
     + bonuses.reduce((s, b) => s + b.points, 0);
   const upgrades = spends.filter((s) => s.kind === 'upgrade');
@@ -119,6 +135,29 @@ async function wallet(playerId) {
     levels,
     spends,
   };
+}
+
+async function wallet(playerId) {
+  const [guesses, bonuses, purchases, spends] = await Promise.all([
+    db.find('guesses', { playerId }),
+    db.find('bonuses', { playerId }),
+    db.find('purchases', { playerId }),
+    db.find('spend', { playerId }),
+  ]);
+  return computeWallet(guesses, bonuses, purchases, spends);
+}
+
+// All the money records in four queries, grouped by player; used where many
+// players are needed at once (the leaderboard) instead of four queries per player.
+async function moneyByPlayer() {
+  const [guesses, bonuses, purchases, spends] = await Promise.all(['guesses', 'bonuses', 'purchases', 'spend'].map((c) => db.find(c)));
+  const by = {};
+  const slot = (pid) => (by[pid] ||= { guesses: [], bonuses: [], purchases: [], spends: [] });
+  guesses.forEach((x) => slot(x.playerId).guesses.push(x));
+  bonuses.forEach((x) => slot(x.playerId).bonuses.push(x));
+  purchases.forEach((x) => slot(x.playerId).purchases.push(x));
+  spends.forEach((x) => slot(x.playerId).spends.push(x));
+  return (pid) => by[pid] || { guesses: [], bonuses: [], purchases: [], spends: [] };
 }
 
 const wrap = (fn) => (req, res) => fn(req, res).catch((e) => {
@@ -185,12 +224,12 @@ const play = express.Router();
 play.use((req, res, next) => requirePlayer(req, res, next).catch(next));
 
 // Personal bets between two players live in their own module.
-const duels = createDuels({ db, newId, nowLocal, today, getSettings, addEvent, wallet, wrap, fail });
+const duels = createDuels({ db, newId, nowLocal, today, getSettings, addEvent, wallet, wrap, fail, withLock, toNumber, photoOf });
 
 // Season 2 features (mining, incidents, upgrades, cosmetics, TV...) live in their own module.
 const season2 = createSeason2({
   db, newId, newToken, nowLocal, today, getMeta, setMeta, getSettings, getArchitecture,
-  addEvent, wallet, wrap, fail, publicPlayer, isLocked, lockAtFor, leaderboard, duels,
+  addEvent, wallet, wrap, fail, publicPlayer, isLocked, lockAtFor, leaderboard, duels, withLock, photoOf,
 });
 
 // =============== ADMIN ===============
@@ -201,10 +240,13 @@ async function purchaseCounts() {
   return counts;
 }
 
+admin.get('/purchase-counts', wrap(async (req, res) => res.json(await purchaseCounts())));
+
 admin.get('/state', wrap(async (req, res) => {
   res.json({
     architecture: await getArchitecture(),
-    players: await db.find('players'),
+    // The admin needs the tokens (to copy player links); photos go by URL like everywhere else.
+    players: (await db.find('players')).map((p) => ({ ...p, photo: photoOf(p) })),
     settings: await getSettings(),
     purchaseCounts: await purchaseCounts(),
     today: today(),
@@ -218,6 +260,15 @@ admin.get('/state', wrap(async (req, res) => {
 admin.put('/architecture', wrap(async (req, res) => {
   const { domains, nodes, edges } = req.body;
   if (!Array.isArray(nodes) || !Array.isArray(edges)) throw fail(400, 'ארכיטקטורה לא תקינה');
+  // A negative price would pay players to buy, and an empty one would make it free.
+  const ids = new Set();
+  for (const n of nodes) {
+    if (!n?.id || typeof n.id !== 'string' || ids.has(n.id) || !n.data) throw fail(400, 'ארכיטקטורה לא תקינה: רכיב בלי מזהה או עם מזהה כפול');
+    ids.add(n.id);
+    const price = toNumber(n.data.price);
+    if (!Number.isFinite(price) || price < 0) throw fail(400, `מחיר לא תקין לרכיב "${n.data.name || n.id}". המחיר צריך להיות 0 ומעלה`);
+    n.data.price = Math.round(price);
+  }
   const before = await getArchitecture();
   const remaining = new Set(nodes.map((n) => n.id));
   const removed = before.nodes.filter((n) => !remaining.has(n.id));
@@ -247,8 +298,10 @@ admin.put('/settings', wrap(async (req, res) => {
   }
   for (const [key, [min, max]] of Object.entries(NUMBER_KEYS)) {
     if (!(key in req.body)) continue;
-    const v = Number(req.body[key]);
+    const v = toNumber(req.body[key]);
     if (!Number.isFinite(v) || v < min || v > max) throw fail(400, `ערך לא תקין: ${key}`);
+    // Everything except the income rate is a whole number (a weekday of 4.5 would never match).
+    if (key !== 'incomeRate' && !Number.isInteger(v)) throw fail(400, `ערך לא תקין: ${key}`);
     next[key] = v;
   }
   if ('workDays' in req.body) {
@@ -257,25 +310,42 @@ admin.put('/settings', wrap(async (req, res) => {
     next.workDays = [...new Set(days)].sort();
   }
   if (next.mineOpen >= next.mineClose) throw fail(400, 'שעת פתיחת המכרה חייבת להיות לפני שעת הסגירה');
+  if (next.earlyTime > next.lockTime) throw fail(400, 'שעת הציפור המוקדמת חייבת להיות לפני שעת הנעילה');
   await setMeta('settings', next);
   res.json(next);
 }));
 
+const MAX_NAME = 40;
+function validName(raw) {
+  const name = typeof raw === 'string' ? raw.trim() : '';
+  if (!name || name.length > MAX_NAME) throw fail(400, `שם חייב להיות בין 1 ל-${MAX_NAME} תווים`);
+  return name;
+}
+function validPhoto(raw) {
+  if (raw === '' || raw === undefined || raw === null) return '';
+  if (typeof raw !== 'string' || !/^data:image\/(png|jpe?g|webp|gif);base64,/.test(raw)) throw fail(400, 'תמונה לא תקינה');
+  return raw;
+}
+
 admin.post('/players', wrap(async (req, res) => {
-  const name = (req.body.name || '').trim();
-  if (!name) throw fail(400, 'חסר שם');
-  const player = { id: newId('p'), name, photo: req.body.photo || '', token: newToken(), active: true, createdAt: new Date().toISOString() };
+  const name = validName(req.body.name);
+  const player = {
+    id: newId('p'), name, photo: validPhoto(req.body.photo), photoV: Date.now(), token: newToken(), active: true, createdAt: new Date().toISOString(),
+  };
   await db.insertOne('players', player);
   await addEvent('join', `${name} הצטרף/ה למשחק 👋`, player.id);
-  res.json(player);
+  res.json({ ...player, photo: photoOf(player) });
 }));
 
 admin.patch('/players/:id', wrap(async (req, res) => {
   const patch = {};
-  for (const k of ['name', 'photo', 'active']) if (k in req.body) patch[k] = req.body[k];
+  if ('name' in req.body) patch.name = validName(req.body.name);
+  if ('photo' in req.body) { patch.photo = validPhoto(req.body.photo); patch.photoV = Date.now(); }
+  if ('active' in req.body) patch.active = Boolean(req.body.active);
   if (req.body.resetToken) patch.token = newToken();
   await db.updateOne('players', { id: req.params.id }, patch);
-  res.json(await db.findOne('players', { id: req.params.id }));
+  const p = await db.findOne('players', { id: req.params.id });
+  res.json(p && { ...p, photo: photoOf(p) });
 }));
 
 // Manual bonuses: the admin rewards someone for real work (handling an incident, solving a problem).
@@ -369,6 +439,7 @@ admin.post('/questions', wrap(async (req, res) => {
 
 admin.post('/questions/copy', wrap(async (req, res) => {
   const { from, to = today() } = req.body;
+  if (to < today()) throw fail(400, 'אי אפשר להעתיק שאלות ליום שעבר');
   const source = (await db.find('questions', { date: from })).sort((a, b) => a.order - b.order);
   const existing = await db.find('questions', { date: to });
   const room = MAX_QUESTIONS_PER_DAY - existing.length;
@@ -461,6 +532,18 @@ admin.post('/days/:date/resolve', wrap(async (req, res) => {
   res.json({ ok: true, allResolved, negative });
 }));
 
+// Player photos, by URL so browsers cache them (the ?v= changes when the photo does).
+// <img> tags can't send our token headers, so this route is open: the ids are random,
+// and it only ever returns the picture.
+app.get('/api/photo/:id', wrap(async (req, res) => {
+  const p = await db.findOne('players', { id: req.params.id });
+  const match = p?.photo && /^data:(image\/[a-z]+);base64,(.+)$/.exec(p.photo);
+  if (!match) throw fail(404, 'אין תמונה');
+  res.set('Content-Type', match[1]);
+  res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  res.send(Buffer.from(match[2], 'base64'));
+}));
+
 season2.register({ app, admin, play });
 duels.register({ admin, play });
 app.use('/api/admin', admin);
@@ -481,6 +564,8 @@ play.get('/architecture', wrap(async (req, res) => res.json(await getArchitectur
 
 play.get('/today', wrap(async (req, res) => {
   const date = req.query.date || today();
+  // Questions the admin prepared for upcoming days stay hidden until their day.
+  if (date > today()) throw fail(400, 'אפשר לראות רק שאלות של היום ושל ימים שעברו');
   const questions = (await db.find('questions', { date })).sort((a, b) => a.order - b.order);
   const guesses = await db.find('guesses', { questionId: { $in: questions.map((q) => q.id) } });
   const players = await db.find('players');
@@ -498,7 +583,7 @@ play.get('/today', wrap(async (req, res) => {
     // Others' guesses stay hidden until the lock, so nobody can copy.
     if (locked) {
       item.guesses = guesses.filter((g) => g.questionId === q.id).map((g) => ({
-        playerId: g.playerId, name: byId[g.playerId]?.name, photo: byId[g.playerId]?.photo,
+        playerId: g.playerId, name: byId[g.playerId]?.name, photo: photoOf(byId[g.playerId]),
         value: g.value, points: g.points, bonus: g.bonus, closest: g.closest, beatCrowd: g.beatCrowd, early: g.early,
       }));
       item.guessCount = item.guesses.length;
@@ -518,7 +603,7 @@ play.get('/today', wrap(async (req, res) => {
 
 play.post('/guesses', wrap(async (req, res) => {
   const { questionId } = req.body;
-  const value = Number(req.body.value);
+  const value = toNumber(req.body.value);
   if (!Number.isFinite(value) || value < 0) throw fail(400, 'ניחוש חייב להיות מספר חיובי');
   const q = await db.findOne('questions', { id: questionId });
   if (!q) throw fail(404, 'שאלה לא נמצאה');
@@ -544,50 +629,62 @@ play.post('/buy', wrap(async (req, res) => {
   const arch = await getArchitecture();
   const node = arch.nodes.find((n) => n.id === componentId);
   if (!node) throw fail(404, 'רכיב לא נמצא');
-  const price = Number(node.data.price) || 0;
-  const w = await wallet(req.player.id);
-  if (w.owned.includes(componentId)) throw fail(400, 'הרכיב כבר שלך');
-  if (w.balance < price) throw fail(400, `חסרים לך ${price - w.balance} דינרים`);
-  try {
-    await db.insertOne('purchases', { id: `${req.player.id}:${componentId}`, playerId: req.player.id, componentId, price, at: new Date().toISOString() });
-  } catch (e) {
-    if (e.code === 'DUPLICATE') throw fail(400, 'הרכיב כבר שלך');
-    throw e;
-  }
+  const price = Math.max(0, Number(node.data.price) || 0);
+  // Serialized per player: the balance check and the purchase happen as one step.
+  await withLock(req.player.id, async () => {
+    const w = await wallet(req.player.id);
+    if (w.owned.includes(componentId)) throw fail(400, 'הרכיב כבר שלך');
+    if (w.balance < price) throw fail(400, `חסרים לך ${price - w.balance} דינרים`);
+    try {
+      await db.insertOne('purchases', { id: `${req.player.id}:${componentId}`, playerId: req.player.id, componentId, price, at: new Date().toISOString() });
+    } catch (e) {
+      if (e.code === 'DUPLICATE') throw fail(400, 'הרכיב כבר שלך');
+      throw e;
+    }
+  });
   await addEvent('purchase', `🏗️ ${req.player.name} קנה/תה את "${node.data.name}" ב-${price} דינרים`, req.player.id);
-  res.json({ ok: true, wallet: await wallet(req.player.id) });
+  const { spends, ...w } = await wallet(req.player.id);
+  res.json({ ok: true, wallet: w });
 }));
 
-// Shared by the player leaderboard and the office TV screen.
+// Shared by the player leaderboard and the office TV screen. Polled by every open tab,
+// so it reads each collection once and groups in memory instead of querying per player.
 async function leaderboard() {
   const arch = await getArchitecture();
   const totalComponents = arch.nodes.length;
   const players = (await db.find('players')).filter((p) => p.active !== false);
   const date = today();
-  const todayQs = await db.find('questions', { date });
-  const todayIds = new Set(todayQs.map((q) => q.id));
+  const [money, questions, badgeCtx, records] = await Promise.all([
+    moneyByPlayer(), db.find('questions'), season2.badgeContext(), duels.records(),
+  ]);
+  const kindOf = Object.fromEntries(questions.map((q) => [q.id, q.kind || 'number']));
+  const resolvedToday = new Set(questions.filter((q) => q.date === date && q.resolved).map((q) => q.id));
+  const maxPoints = (qid) => (kindOf[qid] === 'yesno' ? YESNO_POINTS : 100);
 
   const rows = [];
   for (const p of players) {
-    const w = await wallet(p.id);
-    const guesses = await db.find('guesses', { playerId: p.id });
-    const scored = guesses.filter((g) => typeof g.points === 'number');
-    const dayBonus = (await db.find('bonuses', { playerId: p.id, date }))
-      .filter((b) => b.kind === 'perfect' || b.kind === 'early')
-      .reduce((s, b) => s + b.points, 0);
+    const m = money(p.id);
+    const w = computeWallet(m.guesses, m.bonuses, m.purchases, m.spends);
+    const scored = m.guesses.filter((g) => typeof g.points === 'number');
+    // "Today" counts only what was actually scored: published questions, their early-bird
+    // bonuses, and a perfect day. An early guess alone is not a forecasting result yet.
+    const todayPoints = m.guesses.filter((g) => resolvedToday.has(g.questionId)).reduce((s, g) => s + (g.points || 0) + (g.bonus || 0), 0)
+      + m.bonuses.filter((b) => b.date === date && (b.kind === 'perfect' || (b.kind === 'early' && resolvedToday.has(b.questionId))))
+        .reduce((s, b) => s + b.points, 0);
     rows.push({
       id: p.id,
       name: p.name,
-      photo: p.photo,
+      photo: photoOf(p),
       value: w.value,
       ownedCount: w.owned.length,
       coverage: totalComponents ? w.owned.length / totalComponents : 0,
       balance: w.balance,
       earned: w.earned,
-      accuracy: scored.length ? scored.reduce((s, g) => s + g.points, 0) / scored.length : null,
-      todayPoints: guesses.filter((g) => todayIds.has(g.questionId)).reduce((s, g) => s + (g.points || 0) + (g.bonus || 0), 0) + dayBonus,
-      ...(await season2.playerBadges(p)),
-      duelRecord: await duels.record(p.id),
+      // Each guess as a share of its question's maximum, so yes/no (max 50) and numbers (max 100) compare fairly.
+      accuracy: scored.length ? (scored.reduce((s, g) => s + g.points / maxPoints(g.questionId), 0) / scored.length) * 100 : null,
+      todayPoints,
+      ...season2.playerBadges(p, m.bonuses, badgeCtx),
+      duelRecord: records(p.id),
     });
   }
   // Ties (e.g. everyone at 0 on day one) are broken by balance, then by accuracy.
@@ -609,6 +706,8 @@ play.get('/feed', wrap(async (req, res) => {
 }));
 
 app.use('/api', play);
+// Anything else under /api is a JSON 404, never the web page below.
+app.use('/api', (req, res) => res.status(404).json({ error: 'לא נמצא' }));
 
 // In production the same server also serves the built frontend.
 const dist = path.resolve('dist');

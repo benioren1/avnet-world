@@ -14,9 +14,9 @@ function timeAgo(iso) {
   return `לפני ${Math.round(min / 1440)} ימים`;
 }
 
-export default function Leaderboard({ board, me, onVisit }) {
+export default function Leaderboard({ board, me, onVisit, refreshKey }) {
   const [feed, setFeed] = useState([]);
-  useEffect(() => { playerApi.get('/feed').then(setFeed).catch(() => {}); }, []);
+  useEffect(() => { playerApi.get('/feed').then(setFeed).catch(() => {}); }, [refreshKey]);
 
   const meId = me.player.id;
   const builders = board.rows.filter((r) => r.value > 0);

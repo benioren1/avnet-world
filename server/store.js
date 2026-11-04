@@ -33,15 +33,25 @@ function createFileStore(file) {
   let data = Object.fromEntries(COLLECTIONS.map((c) => [c, []]));
   if (fs.existsSync(file)) data = { ...data, ...JSON.parse(fs.readFileSync(file, 'utf8')) };
 
-  let timer = null;
-  const persist = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      const tmp = `${file}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(data, null, 1));
-      fs.renameSync(tmp, file);
-    }, 100);
+  // Writes are coalesced into one at the end of the current tick (many updates in one
+  // request = one write), and flushed on shutdown, so a restart never loses the last change.
+  let dirty = false;
+  const flush = () => {
+    if (!dirty) return;
+    dirty = false;
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(data));
+    fs.renameSync(tmp, file);
   };
+  const persist = () => {
+    if (dirty) return;
+    dirty = true;
+    setImmediate(flush);
+  };
+  process.on('exit', flush);
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
+    process.on(sig, () => { flush(); process.exit(0); });
+  }
   const clone = (d) => structuredClone(d);
 
   return {
@@ -73,10 +83,23 @@ async function createMongoStore(url, dbName) {
   await client.connect();
   const db = client.db(dbName);
   for (const c of COLLECTIONS) await db.collection(c).createIndex({ id: 1 }, { unique: true });
-  await db.collection('guesses').createIndex({ questionId: 1 });
-  await db.collection('purchases').createIndex({ playerId: 1 });
-  await db.collection('bonuses').createIndex({ playerId: 1 });
-  await db.collection('spend').createIndex({ playerId: 1 });
+  // Indexes for the lookups every request makes, so they don't scan whole collections as data grows.
+  const indexes = {
+    players: [{ token: 1 }],
+    guesses: [{ questionId: 1 }, { playerId: 1 }],
+    purchases: [{ playerId: 1 }, { componentId: 1 }],
+    bonuses: [{ playerId: 1 }, { date: 1, kind: 1 }],
+    spend: [{ playerId: 1 }, { kind: 1, ref: 1 }],
+    questions: [{ date: 1 }],
+    duels: [{ date: 1 }, { by: 1 }, { target: 1 }, { status: 1 }],
+    events: [{ at: -1 }],
+    billboards: [{ status: 1 }, { playerId: 1 }],
+    incidents: [{ status: 1 }],
+    votes: [{ week: 1 }],
+  };
+  for (const [coll, list] of Object.entries(indexes)) {
+    for (const keys of list) await db.collection(coll).createIndex(keys);
+  }
   const opts = { projection: { _id: 0 } };
 
   return {

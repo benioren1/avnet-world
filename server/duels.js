@@ -11,29 +11,37 @@ export const DUEL_MIN = 20;
 export const DUEL_MAX = 200;
 export const DUEL_QUESTION_MAX = 120;
 const KINDS = ['number', 'yesno'];
-// A player takes part in one duel a day; these statuses "use up" the day.
-const COUNTS_FOR_TODAY = ['pending', 'active', 'resolved'];
+// A player takes part in one duel a day. A challenge you sent counts from the moment you
+// send it; one you received counts only once you accept it, so an unanswered invite
+// can't block you (several people may invite you; accepting one declines the rest).
+const SENT_COUNTS = ['pending', 'active', 'resolved'];
+const RECEIVED_COUNTS = ['active', 'resolved'];
 
 export function createDuels(ctx) {
-  const { db, newId, nowLocal, today, getSettings, addEvent, wallet, wrap, fail } = ctx;
+  const { db, newId, nowLocal, today, getSettings, addEvent, wallet, wrap, fail, withLock, toNumber, photoOf } = ctx;
   const nowIso = () => new Date().toISOString();
+  // Creating and accepting bets run one at a time, so "one bet a day" can't be raced.
+  const serial = (fn) => withLock('duels', fn);
 
   async function lockPassed() {
     const { lockTime } = await getSettings();
     return nowLocal().slice(11) >= lockTime;
   }
 
-  async function stake(player, duel) {
-    const w = await wallet(player.id);
-    if (w.balance < duel.stake) throw fail(400, `חסרים לך ${duel.stake - w.balance} דינרים`);
-    try {
-      await db.insertOne('spend', {
-        id: `${duel.id}:${player.id}`, playerId: player.id, kind: 'duel', ref: duel.id, price: duel.stake, date: today(), at: nowIso(),
-      });
-    } catch (e) {
-      if (e.code === 'DUPLICATE') throw fail(400, 'כבר שמת את הסכום על ההתערבות הזו');
-      throw e;
-    }
+  // Locked per player too, so a bet stake and a purchase can't both pass the same balance check.
+  function stake(player, duel) {
+    return withLock(player.id, async () => {
+      const w = await wallet(player.id);
+      if (w.balance < duel.stake) throw fail(400, `חסרים לך ${duel.stake - w.balance} דינרים`);
+      try {
+        await db.insertOne('spend', {
+          id: `${duel.id}:${player.id}`, playerId: player.id, kind: 'duel', ref: duel.id, price: duel.stake, date: today(), at: nowIso(),
+        });
+      } catch (e) {
+        if (e.code === 'DUPLICATE') throw fail(400, 'כבר שמת את הסכום על ההתערבות הזו');
+        throw e;
+      }
+    });
   }
 
   const refundStakes = (duel) => db.deleteMany('spend', { kind: 'duel', ref: duel.id });
@@ -56,15 +64,13 @@ export function createDuels(ctx) {
 
   async function busyToday(playerId) {
     const date = today();
-    const mine = [
-      ...(await db.find('duels', { date, by: playerId })),
-      ...(await db.find('duels', { date, target: playerId })),
-    ];
-    return mine.some((d) => COUNTS_FOR_TODAY.includes(d.status));
+    const sent = await db.find('duels', { date, by: playerId });
+    const received = await db.find('duels', { date, target: playerId });
+    return sent.some((d) => SENT_COUNTS.includes(d.status)) || received.some((d) => RECEIVED_COUNTS.includes(d.status));
   }
 
   function parseGuess(kind, raw) {
-    const v = Number(raw);
+    const v = toNumber(raw);
     if (kind === 'yesno') {
       if (v !== 0 && v !== 1) throw fail(400, 'בחר כן או לא');
     } else if (!Number.isFinite(v) || v < 0) {
@@ -80,8 +86,8 @@ export function createDuels(ctx) {
     return {
       id: d.id, date: d.date, question: d.question, kind: d.kind, stake: d.stake, status: d.status,
       answer: d.status === 'resolved' ? d.answer : null, winner: d.winner ?? null,
-      by: { id: d.by, name: names[d.by]?.name, photo: names[d.by]?.photo },
-      target: { id: d.target, name: names[d.target]?.name, photo: names[d.target]?.photo },
+      by: { id: d.by, name: names[d.by]?.name, photo: photoOf(names[d.by]) },
+      target: { id: d.target, name: names[d.target]?.name, photo: photoOf(names[d.target]) },
       iAmChallenger: mineIsBy,
       myGuess: mineIsBy ? d.byGuess : d.targetGuess,
       theirGuess: revealed ? (mineIsBy ? d.targetGuess : d.byGuess) : null,
@@ -96,13 +102,23 @@ export function createDuels(ctx) {
     return [...(await db.find('duels', { by: playerId })), ...(await db.find('duels', { target: playerId }))];
   }
 
-  async function record(playerId) {
-    const done = (await involving(playerId)).filter((d) => d.status === 'resolved');
+  function recordFrom(done, playerId) {
+    const mine = done.filter((d) => d.by === playerId || d.target === playerId);
     return {
-      wins: done.filter((d) => d.winner === playerId).length,
-      losses: done.filter((d) => d.winner && d.winner !== playerId).length,
-      ties: done.filter((d) => d.winner === null).length,
+      wins: mine.filter((d) => d.winner === playerId).length,
+      losses: mine.filter((d) => d.winner && d.winner !== playerId).length,
+      ties: mine.filter((d) => d.winner === null).length,
     };
+  }
+
+  async function record(playerId) {
+    return recordFrom((await involving(playerId)).filter((d) => d.status === 'resolved'), playerId);
+  }
+
+  // Win/loss records for everyone from one query (the leaderboard shows them for all players).
+  async function records() {
+    const done = await db.find('duels', { status: 'resolved' });
+    return (playerId) => recordFrom(done, playerId);
   }
 
   // Wins per player in the current month, for the "duel king" title.
@@ -122,8 +138,8 @@ export function createDuels(ctx) {
       .map((d) => ({
         id: d.id, question: d.question, kind: d.kind, stake: d.stake, status: d.status, winner: d.winner ?? null,
         answer: d.status === 'resolved' ? d.answer : null,
-        by: { id: d.by, name: names[d.by]?.name, photo: names[d.by]?.photo },
-        target: { id: d.target, name: names[d.target]?.name, photo: names[d.target]?.photo },
+        by: { id: d.by, name: names[d.by]?.name, photo: photoOf(names[d.by]) },
+        target: { id: d.target, name: names[d.target]?.name, photo: photoOf(names[d.target]) },
         byGuess: d.status === 'resolved' || d.kind === 'yesno' ? d.byGuess : null,
         targetGuess: d.status === 'resolved' || d.kind === 'yesno' ? d.targetGuess : null,
       }));
@@ -167,7 +183,9 @@ export function createDuels(ctx) {
       });
     }));
 
-    play.post('/duels', wrap(async (req, res) => {
+    play.post('/duels', wrap((req, res) => serial(() => createDuel(req, res))));
+
+    async function createDuel(req, res) {
       await expireStale();
       if (await lockPassed()) throw fail(400, 'אחרי שעת הנעילה כבר אי אפשר לפתוח התערבות. נסה מחר בבוקר');
       const question = String(req.body.question || '').trim();
@@ -193,22 +211,30 @@ export function createDuels(ctx) {
       await db.insertOne('duels', duel);
       await addEvent('duel', `⚔️ ${req.player.name} אתגר/ה את ${target.name} להתערבות על ${amount} דינרים: "${question}"`, req.player.id, { duelId: duel.id });
       res.json({ ok: true, id: duel.id });
-    }));
+    }
 
-    play.post('/duels/:id/accept', wrap(async (req, res) => {
+    play.post('/duels/:id/accept', wrap((req, res) => serial(() => acceptDuel(req, res))));
+
+    async function acceptDuel(req, res) {
       const d = await db.findOne('duels', { id: req.params.id });
       if (!d || d.target !== req.player.id) throw fail(404, 'התערבות לא נמצאה');
       await expireStale();
       const fresh = await db.findOne('duels', { id: d.id });
       if (fresh.status !== 'pending') throw fail(400, 'ההתערבות כבר לא מחכה לתשובה');
+      if (await busyToday(req.player.id)) throw fail(400, 'כבר יש לך התערבות היום. אם שלחת אתגר שעוד לא התקבל, בטל אותו קודם');
       // In yes/no the opponent automatically takes the other side.
       const guess = d.kind === 'yesno' ? 1 - d.byGuess : parseGuess(d.kind, req.body.guess);
       await stake(req.player, d);
       await db.updateOne('duels', { id: d.id }, { status: 'active', targetGuess: guess, acceptedAt: nowIso() });
+      // One bet a day: other invitations to this player are declined, and their challengers refunded.
+      for (const other of await db.find('duels', { date: today(), target: req.player.id, status: 'pending' })) {
+        await refundStakes(other);
+        await db.updateOne('duels', { id: other.id }, { status: 'declined', closedAt: nowIso() });
+      }
       const by = await db.findOne('players', { id: d.by });
       await addEvent('duel', `🤝 ${req.player.name} קיבל/ה את האתגר של ${by?.name}! בקופה ${d.stake * 2} דינרים`, req.player.id, { duelId: d.id });
       res.json({ ok: true });
-    }));
+    }
 
     play.post('/duels/:id/decline', wrap(async (req, res) => {
       const d = await db.findOne('duels', { id: req.params.id });
@@ -234,8 +260,8 @@ export function createDuels(ctx) {
       const list = (await db.find('duels', { date })).sort((a, b) => a.at.localeCompare(b.at));
       res.json(list.map((d) => ({
         ...d,
-        byName: names[d.by]?.name, byPhoto: names[d.by]?.photo,
-        targetName: names[d.target]?.name, targetPhoto: names[d.target]?.photo,
+        byName: names[d.by]?.name, byPhoto: photoOf(names[d.by]),
+        targetName: names[d.target]?.name, targetPhoto: photoOf(names[d.target]),
       })));
     }));
 
@@ -243,7 +269,7 @@ export function createDuels(ctx) {
     admin.post('/duels/:id/resolve', wrap(async (req, res) => {
       const d = await db.findOne('duels', { id: req.params.id });
       if (!d || !['active', 'resolved'].includes(d.status)) throw fail(404, 'אפשר להכריע רק התערבות שהתקבלה');
-      const answer = Number(req.body.answer);
+      const answer = toNumber(req.body.answer);
       if (d.kind === 'yesno' ? answer !== 0 && answer !== 1 : !Number.isFinite(answer)) throw fail(400, 'תשובה לא תקינה');
       await clearResult(d);
       const winner = decide(d, answer);
@@ -278,5 +304,5 @@ export function createDuels(ctx) {
     }));
   }
 
-  return { register, record, winsThisMonth, forTv, cleanupPlayer, expireStale };
+  return { register, record, records, winsThisMonth, forTv, cleanupPlayer, expireStale };
 }

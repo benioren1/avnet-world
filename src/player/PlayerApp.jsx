@@ -192,7 +192,7 @@ export default function PlayerApp() {
       )}
 
       <main className="player-main">
-        {tab === 'today' && <TodayPanel key={tick} architecture={architecture} meId={me.player.id} onChange={refresh} notify={notify} />}
+        {tab === 'today' && <TodayPanel refreshKey={tick} architecture={architecture} meId={me.player.id} onChange={refresh} notify={notify} />}
         {tab === 'city' && (
           <CityMap
             architecture={architecture}
@@ -216,7 +216,7 @@ export default function PlayerApp() {
         {tab === 'shop' && <Shop architecture={architecture} owned={myCity.owned} balance={me.wallet.balance} onBuy={buy} />}
         {tab === 'studio' && <Studio me={me} onChange={refresh} notify={notify} onPlace={startPlacing} />}
         {tab === 'duels' && <DuelsPanel me={me} board={board} duels={duels} onChange={refresh} notify={notify} />}
-        {tab === 'board' && <Leaderboard key={tick} board={board} me={me} onVisit={visit} />}
+        {tab === 'board' && <Leaderboard refreshKey={tick} board={board} me={me} onVisit={visit} />}
       </main>
 
       {toast && <div className="toast">{toast}</div>}

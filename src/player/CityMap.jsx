@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, applyNodeChanges, useReactFlow,
 } from '@xyflow/react';
@@ -42,9 +42,11 @@ function CityCanvas({
     })),
   ], [architecture, city, mine, decoMeta]);
 
-  // Local copy so decorations can be dragged smoothly; saved on drop.
+  // Local copy so decorations can be dragged smoothly; saved on drop. The auto-refresh
+  // rebuilds baseNodes every minute, so it must not snap a decoration back mid-drag.
   const [nodes, setNodes] = useState(baseNodes);
-  useEffect(() => setNodes(baseNodes), [baseNodes]);
+  const dragging = useRef(false);
+  useEffect(() => { if (!dragging.current) setNodes(baseNodes); }, [baseNodes]);
   const shownNodes = useMemo(() => nodes.map((n) => (n.type === 'component' ? { ...n, selected: n.id === selectedId } : n)), [nodes, selectedId]);
 
   // A connection lights up only when both ends are owned and neither is burning.
@@ -132,7 +134,11 @@ function CityCanvas({
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             onNodesChange={(changes) => setNodes((ns) => applyNodeChanges(changes.filter((c) => c.type === 'position' || c.type === 'dimensions'), ns))}
-            onNodeDragStop={(_, n) => n.type === 'decoration' && onMoveDecoration(n.id.slice(5), Math.round(n.position.x), Math.round(n.position.y))}
+            onNodeDragStart={() => { dragging.current = true; }}
+            onNodeDragStop={(_, n) => {
+              dragging.current = false;
+              if (n.type === 'decoration') onMoveDecoration(n.id.slice(5), Math.round(n.position.x), Math.round(n.position.y));
+            }}
             nodesConnectable={false}
             edgesFocusable={false}
             deleteKeyCode={null}
