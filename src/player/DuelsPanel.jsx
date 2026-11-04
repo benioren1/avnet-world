@@ -3,6 +3,7 @@ import { Check, Lock, RotateCcw, Swords, X } from 'lucide-react';
 import { playerApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 import { Coin } from '../icons.jsx';
+import { useFx } from '../fx/GameFx.jsx';
 
 const YESNO = { 1: 'כן', 0: 'לא' };
 const showValue = (kind, v) => (kind === 'yesno' ? YESNO[v] : Number(v).toLocaleString());
@@ -54,13 +55,19 @@ function DuelCard({ d, meId, onAct }) {
   );
 }
 
-function Invitation({ d, onAct }) {
+function Invitation({ d, onAct, balance }) {
   const [guess, setGuess] = useState('');
-  const accept = () => {
+  const { confirm, flyCoins } = useFx();
+  const accept = async () => {
     if (d.kind === 'number' && guess === '') return;
-    const side = d.kind === 'yesno' ? ` אתה על "${YESNO[1 - d.theirGuess]}".` : '';
-    if (!window.confirm(`לקבל את האתגר של ${d.by.name} על ${d.stake} דינרים?${side}`)) return;
-    onAct(playerApi.post(`/duels/${d.id}/accept`, { guess }), '🤝 קיבלת את האתגר! בהצלחה');
+    const ok = await confirm({
+      icon: '🤝',
+      title: `לקבל את האתגר של ${d.by.name}?`,
+      body: d.kind === 'yesno' ? `אתה על "${YESNO[1 - d.theirGuess]}". המנצח לוקח ${d.stake * 2}.` : `הניחוש שלך: ${Number(guess).toLocaleString()}. המנצח לוקח ${d.stake * 2}.`,
+      price: d.stake, priceLabel: 'אתה שם', balance, okLabel: 'מקבל!',
+    });
+    if (!ok) return;
+    if (await onAct(playerApi.post(`/duels/${d.id}/accept`, { guess }), '🤝 קיבלת את האתגר! בהצלחה')) flyCoins();
   };
   return (
     <div className="card duel-invite">
@@ -93,13 +100,17 @@ export default function DuelsPanel({ me, board, duels, onChange, notify }) {
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
   const { rules, record } = duels;
 
+  const { confirm, flyCoins } = useFx();
+  // Returns true when the server said yes, so a stake can fly its coins.
   const act = async (promise, ok) => {
     try {
       await promise;
       if (ok) notify(ok);
       await onChange();
+      return true;
     } catch (e) {
       notify(`❌ ${e.message}`);
+      return false;
     }
   };
 
@@ -109,11 +120,15 @@ export default function DuelsPanel({ me, board, duels, onChange, notify }) {
   const target = opponents.find((r) => r.id === form.targetId);
   const canCreate = !duels.busy && !rules.lockPassed;
 
-  const create = (e) => {
+  const create = async (e) => {
     e.preventDefault();
     if (!form.targetId || !form.question.trim() || form.guess === '') return notify('❌ בחר יריב, כתוב שאלה והכנס את הניחוש שלך');
-    if (!window.confirm(`לאתגר את ${target.name} על ${form.stake} דינרים? הסכום יינעל עד ההכרעה.`)) return;
-    act(playerApi.post('/duels', form).then(() => set({ question: '', guess: '', targetId: '' })), `⚔️ האתגר נשלח ל${target.name}!`);
+    const ok = await confirm({
+      icon: '⚔️', title: `לאתגר את ${target.name}?`, body: `"${form.question.trim()}" · הסכום נעול עד ההכרעה, המנצח לוקח ${form.stake * 2}.`,
+      price: form.stake, priceLabel: 'אתה שם', balance: me.wallet.balance, okLabel: 'שלח אתגר',
+    });
+    if (!ok) return;
+    if (await act(playerApi.post('/duels', form).then(() => set({ question: '', guess: '', targetId: '' })), `⚔️ האתגר נשלח ל${target.name}!`)) flyCoins();
   };
 
   const revenge = (d) => {
@@ -132,7 +147,7 @@ export default function DuelsPanel({ me, board, duels, onChange, notify }) {
         <span className="record-pill" title="ניצחונות - הפסדים">⚔️ {record.wins}-{record.losses}{record.ties ? ` (${record.ties} תיקו)` : ''}</span>
       </div>
 
-      {invitations.map((d) => <Invitation key={d.id} d={d} onAct={act} />)}
+      {invitations.map((d) => <Invitation key={d.id} d={d} onAct={act} balance={me.wallet.balance} />)}
       {mine.map((d) => <DuelCard key={d.id} d={d} meId={meId} onAct={act} />)}
 
       {canCreate ? (
