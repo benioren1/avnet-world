@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Building2, Lock, Palette, ShieldCheck, ShoppingBag, Sun, Trophy } from 'lucide-react';
+import { AlertTriangle, Building2, Lock, Palette, ShieldCheck, ShoppingBag, Sun, Swords, Trophy } from 'lucide-react';
 import { playerApi, readToken } from '../api.js';
 import Avatar from '../Avatar.jsx';
 import { Coin } from '../icons.jsx';
@@ -9,9 +9,11 @@ import Shop from './Shop.jsx';
 import Leaderboard from './Leaderboard.jsx';
 import Studio from './Studio.jsx';
 import MineButton from './MineButton.jsx';
+import DuelsPanel from './DuelsPanel.jsx';
 
 const TABS = [
   ['today', 'היום', Sun],
+  ['duels', 'התערבויות', Swords],
   ['city', 'העיר שלי', Building2],
   ['shop', 'חנות', ShoppingBag],
   ['studio', 'סטודיו', Palette],
@@ -24,6 +26,7 @@ export default function PlayerApp() {
   const [me, setMe] = useState(null);
   const [architecture, setArchitecture] = useState(null);
   const [board, setBoard] = useState(null);
+  const [duels, setDuels] = useState(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('today');
   const [visiting, setVisiting] = useState(null); // city of another player
@@ -35,10 +38,13 @@ export default function PlayerApp() {
   const notify = useCallback((m) => { setToast(m); setTimeout(() => setToast(''), 3500); }, []);
 
   const refresh = useCallback(async () => {
-    const [m, a, b] = await Promise.all([playerApi.get('/me'), playerApi.get('/architecture'), playerApi.get('/leaderboard')]);
+    const [m, a, b, du] = await Promise.all([
+      playerApi.get('/me'), playerApi.get('/architecture'), playerApi.get('/leaderboard'), playerApi.get('/duels'),
+    ]);
     setMe(m);
     setArchitecture(a);
     setBoard(b);
+    setDuels(du);
     setTick((t) => t + 1);
   }, []);
 
@@ -136,7 +142,8 @@ export default function PlayerApp() {
       </div>
     );
   }
-  if (!me || !architecture || !board) return <div className="center-page muted">טוען...</div>;
+  if (!me || !architecture || !board || !duels) return <div className="center-page muted">טוען...</div>;
+  const invitations = duels.today.filter((d) => !d.iAmChallenger && d.status === 'pending').length;
 
   const myRank = board.rows.findIndex((r) => r.id === me.player.id) + 1;
   const viewingOther = tab === 'city' && visiting;
@@ -162,6 +169,7 @@ export default function PlayerApp() {
               onClick={() => { setTab(key); setPlacing(null); if (key === 'city') setVisiting(null); }}
             >
               <Icon size={16} /> {label}
+              {key === 'duels' && invitations > 0 && <span className="tab-badge">{invitations}</span>}
             </button>
           ))}
         </nav>
@@ -207,6 +215,7 @@ export default function PlayerApp() {
         )}
         {tab === 'shop' && <Shop architecture={architecture} owned={myCity.owned} balance={me.wallet.balance} onBuy={buy} />}
         {tab === 'studio' && <Studio me={me} onChange={refresh} notify={notify} onPlace={startPlacing} />}
+        {tab === 'duels' && <DuelsPanel me={me} board={board} duels={duels} onChange={refresh} notify={notify} />}
         {tab === 'board' && <Leaderboard key={tick} board={board} me={me} onVisit={visit} />}
       </main>
 

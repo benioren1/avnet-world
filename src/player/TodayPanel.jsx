@@ -5,8 +5,17 @@ import Avatar from '../Avatar.jsx';
 import { Coin } from '../icons.jsx';
 
 // "84 accuracy + 20 closest + 10 beat the crowd + 10 early", so nobody wonders why they got 124.
-function Breakdown({ g, earlyBonus }) {
+function Breakdown({ g, kind, earlyBonus }) {
   if (typeof g.points !== 'number') return null;
+  if (kind === 'yesno') {
+    return (
+      <span className="breakdown">
+        <span>{g.points ? `✅ ${g.points} צדקת` : '❌ לא הפעם'}</span>
+        {g.beatCrowd && <span>+30 נגד הזרם 🧠</span>}
+        {g.early && earlyBonus > 0 && <span>+{earlyBonus} מוקדם 🐦</span>}
+      </span>
+    );
+  }
   return (
     <span className="breakdown">
       <span>🎯 {g.points} דיוק</span>
@@ -17,6 +26,44 @@ function Breakdown({ g, earlyBonus }) {
   );
 }
 
+const YESNO = { 1: 'כן', 0: 'לא' };
+const showValue = (kind, v) => (kind === 'yesno' ? YESNO[v] : Number(v).toLocaleString());
+
+function YesNoForm({ onSubmit }) {
+  const pick = (v) => window.confirm(`לנעול "${YESNO[v]}"? אי אפשר לשנות אחר כך.`) && onSubmit(v);
+  return (
+    <div className="guess-form yesno-form">
+      <button className="yes-btn" onClick={() => pick(1)}>✅ כן</button>
+      <button className="no-btn" onClick={() => pick(0)}>❌ לא</button>
+    </div>
+  );
+}
+
+// Yes/no results: who said yes and who said no, side by side.
+function YesNoSplit({ q, meId, earlyBonus }) {
+  return (
+    <div className="yesno-split">
+      {[1, 0].map((side) => {
+        const group = q.guesses.filter((g) => g.value === side);
+        const right = q.answer === side;
+        return (
+          <div key={side} className={`yesno-col${q.answer !== undefined ? (right ? ' right' : ' wrong') : ''}`}>
+            <div className="yesno-col-head">{side ? '✅ כן' : '❌ לא'} <span className="muted small">({group.length})</span></div>
+            <div className="guess-chips">
+              {group.map((g) => (
+                <span className={`guess-chip${g.playerId === meId ? ' me' : ''}`} key={g.playerId}>
+                  <Avatar name={g.name} photo={g.photo} size={22} /> {g.name}
+                  {typeof g.points === 'number' && g.points > 0 && <span className="pts">+{g.points + (g.bonus || 0) + (g.early ? earlyBonus : 0)}</span>}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function HowItWorks({ data }) {
   return (
     <details className="card how-it-works">
@@ -24,7 +71,8 @@ function HowItWorks({ data }) {
       <ul>
         <li>מנחשים מספר אמיתי מהמערכת. ככל שקרובים יותר, מקבלים יותר: עד 2% סטייה = 100, 10% = 80, 25% = 50, 50% = 20.</li>
         <li><b>+20</b> למי שהכי קרוב בשאלה, <b>+10</b> למי שקרוב יותר מהממוצע של הצוות.</li>
-        <li><b>+50</b> ליום מושלם: כל השאלות בטווח של 10%.</li>
+        <li>בשאלות <b>כן/לא</b>: תשובה נכונה = <b>50</b>, ואם רוב הצוות טעה ואתה צדקת <b>+30</b> 🧠</li>
+        <li><b>+50</b> ליום מושלם: כל השאלות בטווח של 10% (ובכן/לא, תשובה נכונה).</li>
         {data.earlyBonus > 0 && <li><b>+{data.earlyBonus}</b> על כל ניחוש לפני {data.earlyTime} 🐦</li>}
         <li>הניחושים של כולם נחשפים בשעת הנעילה, והתשובה האמיתית בסוף היום.</li>
         <li>בדינרים קונים רכיבים אמיתיים של המערכת, משדרגים אותם ומעצבים את העיר בסטודיו.</li>
@@ -150,20 +198,23 @@ export default function TodayPanel({ architecture, meId, onChange, notify }) {
             <span className="q-num">{i + 1}</span>
             <div>
               <div className="q-text">{q.text}</div>
+              {q.kind === 'yesno' && <span className="tag">✅ כן/לא</span>}
               {q.componentId && <span className="tag"><Box size={11} /> {nodeName(q.componentId)}</span>}
             </div>
           </div>
 
-          {!q.myGuess && !q.locked && <GuessForm q={q} onSubmit={(v) => guess(q, v).then(onChange)} />}
+          {!q.myGuess && !q.locked && (q.kind === 'yesno'
+            ? <YesNoForm onSubmit={(v) => guess(q, v).then(onChange)} />
+            : <GuessForm q={q} onSubmit={(v) => guess(q, v).then(onChange)} />)}
           {!q.myGuess && q.locked && <p className="muted">⏰ פספסת את השאלה הזו</p>}
           {q.myGuess && (
             <div className="my-guess">
-              הניחוש שלך: <b>{q.myGuess.value.toLocaleString()}</b> {q.unit}
+              {q.kind === 'yesno' ? 'ענית: ' : 'הניחוש שלך: '}<b>{showValue(q.kind, q.myGuess.value)}</b> {q.unit}
               {q.myGuess.early && typeof q.myGuess.points !== 'number' && <span className="early-chip">🐦 +{data.earlyBonus}</span>}
               {typeof q.myGuess.points === 'number' && (
                 <>
                   <span className="pts big">+<Coin value={q.myGuess.points + (q.myGuess.bonus || 0) + (q.myGuess.early ? data.earlyBonus : 0)} size={14} /></span>
-                  <Breakdown g={q.myGuess} earlyBonus={data.earlyBonus} />
+                  <Breakdown g={q.myGuess} kind={q.kind} earlyBonus={data.earlyBonus} />
                 </>
               )}
             </div>
@@ -175,7 +226,9 @@ export default function TodayPanel({ architecture, meId, onChange, notify }) {
               {' '}הניחושים ייחשפו ב-{q.lockTime}
             </p>
           )}
-          {q.locked && q.guesses?.length > 0 && <Distribution q={q} meId={meId} earlyBonus={data.earlyBonus} />}
+          {q.locked && q.guesses?.length > 0 && (q.kind === 'yesno'
+            ? <YesNoSplit q={q} meId={meId} earlyBonus={data.earlyBonus} />
+            : <Distribution q={q} meId={meId} earlyBonus={data.earlyBonus} />)}
           {q.locked && !q.resolved && <p className="muted small">⏳ מחכים לתשובה האמיתית בסוף היום...</p>}
         </div>
       ))}

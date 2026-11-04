@@ -353,3 +353,60 @@ button.upgrade-btn:hover:not(:disabled) { background: linear-gradient(135deg, #f
   .billboard-form { flex-wrap: wrap; }
   .mine-reward { left: 0; transform: none; }
 }
+
+/* =================== yes/no questions & personal bets =================== */
+.kind-toggle { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.yesno-picker { display: inline-flex; gap: 6px; }
+.chip-btn.selected.yes { border-color: var(--success); background: rgba(45, 212, 160, 0.14); box-shadow: 0 0 0 1px var(--success); }
+.chip-btn.selected.no { border-color: var(--danger); background: rgba(255, 107, 129, 0.12); box-shadow: 0 0 0 1px var(--danger); }
+.yesno-form { gap: 10px; }
+.yesno-form button { flex: 1; max-width: 160px; padding: 11px; font-size: 16px; font-weight: 600; }
+.yes-btn:hover:not(:disabled) { border-color: var(--success); background: rgba(45, 212, 160, 0.12); }
+.no-btn:hover:not(:disabled) { border-color: var(--danger); background: rgba(255, 107, 129, 0.1); }
+.yesno-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.yesno-col { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; background: var(--bg-2); }
+.yesno-col.right { border-color: var(--success); background: rgba(45, 212, 160, 0.07); }
+.yesno-col.wrong { opacity: 0.6; }
+.yesno-col-head { font-weight: 600; margin-bottom: 4px; }
+
+.record-pill {
+  font-weight: 700; padding: 5px 14px; border-radius: 999px; white-space: nowrap;
+  background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.duel-card, .duel-invite, .duel-form { display: flex; flex-direction: column; gap: 10px; }
+.duel-card.won { border-color: #fbbf24; background: linear-gradient(180deg, rgba(251, 191, 36, 0.1), var(--panel)); }
+.duel-card.lost { opacity: 0.85; }
+.duel-question { font-size: 16px; font-weight: 600; }
+.duel-sides { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.duel-side { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--border); }
+.duel-side.winner { border-color: #fbbf24; color: #fde68a; }
+.vs { font-weight: 800; color: var(--muted); font-size: 12px; }
+.duel-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.duel-foot .muted { flex: 1; }
+.duel-invite { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: invite-glow 1.8s ease-in-out infinite alternate; }
+@keyframes invite-glow { to { box-shadow: 0 0 0 6px rgba(91, 140, 255, 0.08); } }
+.duel-invite-head { display: flex; align-items: center; gap: 12px; }
+.duel-invite-head > div { flex: 1; }
+.stake-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.bonus-player:disabled { opacity: 0.35; }
+.duel-admin { padding: 12px 0; border-top: 1px solid var(--border-soft); display: flex; flex-direction: column; gap: 8px; }
+.duel-admin-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+
+/* TV: bets slide */
+.tv-duels { display: flex; flex-direction: column; gap: 14px; }
+.tv-duel {
+  display: grid; grid-template-columns: 1fr 2fr 1fr; align-items: center; gap: 16px;
+  padding: 16px 24px; border-radius: 20px; background: var(--panel); border: 1px solid var(--border);
+}
+.tv-duelist { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 22px; }
+.tv-duelist span { font-size: 26px; font-weight: 700; color: #c4b5fd; }
+.tv-duelist.winner b { color: #fde68a; }
+.tv-duel-mid { text-align: center; display: flex; flex-direction: column; gap: 8px; }
+.tv-duel-q { font-size: 28px; font-weight: 700; }
+.tv-duel-pot { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 22px; color: var(--muted); }
+.tv-duel-answer { font-size: 22px; color: var(--success); font-weight: 700; }
+
+@media (max-width: 800px) {
+  .yesno-split { grid-template-columns: 1fr; }
+  .duel-invite-head { flex-wrap: wrap; }
+}

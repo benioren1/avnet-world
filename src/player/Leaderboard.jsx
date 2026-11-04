@@ -62,7 +62,7 @@ export default function Leaderboard({ board, me, onVisit }) {
         <div className="table-scroll">
           <table className="board">
             <thead>
-              <tr><th>#</th><th>שחקן</th><th>שווי העיר</th><th>כיסוי</th><th>דינרים</th><th>דיוק ממוצע</th><th>היום</th></tr>
+              <tr><th>#</th><th>שחקן</th><th>שווי העיר</th><th>כיסוי</th><th>דינרים</th><th>דיוק ממוצע</th><th>היום</th><th title="ניצחונות-הפסדים בהתערבויות">⚔️</th></tr>
             </thead>
             <tbody>
               {board.rows.map((r, i) => (
@@ -93,6 +93,7 @@ export default function Leaderboard({ board, me, onVisit }) {
                   <td>{r.balance.toLocaleString()}</td>
                   <td>{r.accuracy === null ? '—' : `${Math.round(r.accuracy)}%`}</td>
                   <td>{r.todayPoints ? `+${r.todayPoints}` : '—'}</td>
+                  <td className="small">{r.duelRecord && (r.duelRecord.wins + r.duelRecord.losses) > 0 ? `${r.duelRecord.wins}-${r.duelRecord.losses}` : '—'}</td>
                 </tr>
               ))}
             </tbody>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { AlertTriangle, Building2, Clock, Megaphone, Pickaxe, Sun, Trophy, Tv } from 'lucide-react';
+import { AlertTriangle, Building2, Clock, Megaphone, Pickaxe, Sun, Swords, Trophy, Tv } from 'lucide-react';
 import { tvApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 import ComponentNode, { DecorationNode, EditorContext } from '../ComponentNode.jsx';
@@ -113,12 +113,43 @@ function TodaySlide({ state }) {
             <span className="q-num">{i + 1}</span>
             <div className="tv-q-text">{q.text}</div>
             {q.resolved ? (
-              <span className="tv-answer">🎯 {q.answer.toLocaleString()} {q.unit}</span>
+              <span className="tv-answer">🎯 {q.kind === 'yesno' ? (q.answer ? 'כן' : 'לא') : `${q.answer.toLocaleString()} ${q.unit}`}</span>
             ) : q.locked ? (
               <span className="tv-locked">🔒 {q.guessCount} ניחושים · מחכים לתשובה</span>
             ) : (
               <span className="tv-open"><Clock size={20} /> נועל ב-{q.lockTime} · {q.guessCount} ניחשו</span>
             )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Today's personal bets: who challenged whom, on what, and (once decided) who won.
+function DuelsSlide({ duels }) {
+  const show = (d, v) => (v === null || v === undefined ? '🔒' : d.kind === 'yesno' ? (v ? 'כן' : 'לא') : Number(v).toLocaleString());
+  return (
+    <div className="tv-slide">
+      <h1 className="tv-title"><Swords size={36} className="accent" /> ההתערבויות של היום</h1>
+      <div className="tv-duels">
+        {duels.slice(0, 5).map((d) => (
+          <div className="tv-duel" key={d.id}>
+            <div className={`tv-duelist${d.winner === d.by.id ? ' winner' : ''}`}>
+              <Avatar name={d.by.name} photo={d.by.photo} size={64} crown={d.winner === d.by.id} />
+              <b>{d.by.name}</b>
+              <span>{show(d, d.byGuess)}</span>
+            </div>
+            <div className="tv-duel-mid">
+              <div className="tv-duel-q">"{d.question}"</div>
+              <div className="tv-duel-pot">⚔️ קופה <Coin value={d.stake * 2} size={22} /></div>
+              {d.status === 'resolved' && <div className="tv-duel-answer">התשובה: {show(d, d.answer)}</div>}
+            </div>
+            <div className={`tv-duelist${d.winner === d.target.id ? ' winner' : ''}`}>
+              <Avatar name={d.target.name} photo={d.target.photo} size={64} crown={d.winner === d.target.id} />
+              <b>{d.target.name}</b>
+              <span>{show(d, d.targetGuess)}</span>
+            </div>
           </div>
         ))}
       </div>
@@ -187,7 +218,8 @@ export default function TvApp() {
   // An open incident takes over every other slide. Featured announcements get a slide
   // between the regular ones, taking turns when there are several.
   const featured = state.announcements.filter((a) => a.featured);
-  const regular = featured.length ? ['board', 'announce', 'city', 'announce', 'today', 'announce'] : ['board', 'city', 'today'];
+  const base = state.duels?.length ? ['board', 'city', 'today', 'duels'] : ['board', 'city', 'today'];
+  const regular = featured.length ? base.flatMap((s) => [s, 'announce']) : base;
   const slides = state.incidents.length ? ['incident', 'board', 'incident', 'city'] : regular;
   const current = slides[slide % slides.length];
   const announceTurn = Math.floor(slide / slides.length) * slides.filter((s) => s === 'announce').length
@@ -218,6 +250,7 @@ export default function TvApp() {
         {current === 'board' && <BoardSlide board={state.board} />}
         {current === 'city' && <CitySlide state={state} />}
         {current === 'today' && <TodaySlide state={state} />}
+        {current === 'duels' && <DuelsSlide duels={state.duels} />}
         {current === 'incident' && <IncidentSlide incidents={state.incidents} />}
         {current === 'announce' && featured.length > 0 && <AnnouncementSlide announcement={featured[announceTurn % featured.length]} />}
       </main>

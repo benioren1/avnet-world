@@ -5,13 +5,110 @@ import Avatar from '../Avatar.jsx';
 import { COMPONENT_TYPES } from '../model.js';
 
 const MAX = 5;
-const TEMPLATES = [
-  { label: '📥 תוצרים', text: 'כמה תוצרים ייקלטו היום ב{c}?', unit: 'תוצרים' },
-  { label: '📨 בקשות', text: 'כמה בקשות יקבל {c} היום?', unit: 'בקשות' },
-  { label: '📤 ייצוא', text: 'כמה תוצרים ייצא {c} היום?', unit: 'תוצרים' },
-  { label: '⚠️ שגיאות', text: 'כמה שגיאות יהיו ב{c} היום?', unit: 'שגיאות' },
-  { label: '⏱️ זמן תגובה', text: 'מה יהיה זמן התגובה הממוצע של {c} היום (ms)?', unit: 'ms' },
-];
+const TEMPLATES = {
+  number: [
+    { label: '📥 תוצרים', text: 'כמה תוצרים ייקלטו היום ב{c}?', unit: 'תוצרים' },
+    { label: '📨 בקשות', text: 'כמה בקשות יקבל {c} היום?', unit: 'בקשות' },
+    { label: '📤 ייצוא', text: 'כמה תוצרים ייצא {c} היום?', unit: 'תוצרים' },
+    { label: '⚠️ שגיאות', text: 'כמה שגיאות יהיו ב{c} היום?', unit: 'שגיאות' },
+    { label: '⏱️ זמן תגובה', text: 'מה יהיה זמן התגובה הממוצע של {c} היום (ms)?', unit: 'ms' },
+  ],
+  yesno: [
+    { label: '🔥 תקלה', text: 'האם תהיה היום תקלה ב{c}?', unit: '' },
+    { label: '🚀 דיפלוי', text: 'האם יהיה היום דיפלוי ל{c}?', unit: '' },
+    { label: '📈 שיא', text: 'האם {c} ישבור היום שיא?', unit: '' },
+  ],
+};
+const YESNO = { 1: 'כן', 0: 'לא' };
+const showValue = (kind, v) => (kind === 'yesno' ? YESNO[v] : Number(v).toLocaleString());
+
+// Yes / no picker used for answers (questions and bets).
+function YesNoPicker({ value, onChange }) {
+  return (
+    <span className="yesno-picker">
+      <button type="button" className={`chip-btn${value === 1 || value === '1' ? ' selected yes' : ''}`} onClick={() => onChange(1)}>✅ כן</button>
+      <button type="button" className={`chip-btn${value === 0 || value === '0' ? ' selected no' : ''}`} onClick={() => onChange(0)}>❌ לא</button>
+    </span>
+  );
+}
+
+// ---- step 3: personal bets players opened today; the admin enters the real answer ----
+const DUEL_STATUS = {
+  pending: '⏳ מחכה שהצד השני יקבל',
+  active: '⚔️ פעילה, מחכה לתשובה שלך',
+  resolved: '✓ הוכרעה',
+  declined: 'נדחתה',
+  expired: 'פג תוקף',
+  cancelled: 'בוטלה',
+};
+
+function DuelsSection({ date, flash }) {
+  const [list, setList] = useState([]);
+  const [answers, setAnswers] = useState({});
+  const load = useCallback(() => adminApi.get(`/duels?date=${date}`).then((l) => {
+    setList(l);
+    setAnswers(Object.fromEntries(l.map((d) => [d.id, d.answer ?? ''])));
+  }), [date]);
+  useEffect(() => { load().catch(() => {}); }, [load]);
+
+  const resolve = (d) => {
+    const answer = answers[d.id];
+    if (answer === '' || answer === null || answer === undefined) return flash('❌ הכנס תשובה להתערבות');
+    adminApi.post(`/duels/${d.id}/resolve`, { answer })
+      .then((r) => { flash(r.winnerName ? `🏆 ${r.winnerName} ניצח/ה בהתערבות` : '🤝 תיקו, כל אחד קיבל את הכסף שלו'); load(); })
+      .catch((e) => flash(`❌ ${e.message}`));
+  };
+  const cancel = (d) => window.confirm('לבטל את ההתערבות? שני הצדדים יקבלו את הכסף שלהם בחזרה.') && adminApi.post(`/duels/${d.id}/cancel`)
+    .then(() => { flash('ההתערבות בוטלה והכסף הוחזר'); load(); })
+    .catch((e) => flash(`❌ ${e.message}`));
+
+  const shown = list.filter((d) => ['pending', 'active', 'resolved'].includes(d.status));
+  if (!shown.length) return null;
+
+  return (
+    <section className="card">
+      <div className="section-head">
+        <h3 className="title-with-icon"><span className="step">3</span> ⚔️ התערבויות אישיות <span className="count-pill">{shown.length}</span></h3>
+      </div>
+      <p className="muted small">שאלות שהשחקנים כתבו ביניהם. הכנס את התשובה האמיתית, והקרוב יותר לוקח את הקופה. שאלה שאי אפשר לענות עליה אפשר לבטל, וכל אחד מקבל את הכסף שלו.</p>
+      {shown.map((d) => (
+        <div className="duel-admin" key={d.id}>
+          <div className="duel-admin-head">
+            <b>"{d.question}"</b>
+            <span className="muted small">{DUEL_STATUS[d.status]} · קופה {d.stake * 2} דינרים</span>
+          </div>
+          <div className="duel-sides">
+            <span className={`duel-side${d.winner === d.by ? ' winner' : ''}`}>
+              <Avatar name={d.byName} photo={d.byPhoto} size={26} /> {d.byName}: <b>{showValue(d.kind, d.byGuess)}</b>
+            </span>
+            <span className="vs">מול</span>
+            <span className={`duel-side${d.winner === d.target ? ' winner' : ''}`}>
+              <Avatar name={d.targetName} photo={d.targetPhoto} size={26} /> {d.targetName}:
+              <b>{d.targetGuess === null || d.targetGuess === undefined ? '—' : showValue(d.kind, d.targetGuess)}</b>
+            </span>
+          </div>
+          {d.status !== 'pending' && (
+            <div className="row wrap">
+              {d.kind === 'yesno' ? (
+                <YesNoPicker value={answers[d.id]} onChange={(v) => setAnswers((a) => ({ ...a, [d.id]: v }))} />
+              ) : (
+                <input
+                  type="number"
+                  className="answer-input"
+                  placeholder="תשובה אמיתית"
+                  value={answers[d.id] ?? ''}
+                  onChange={(e) => setAnswers((a) => ({ ...a, [d.id]: e.target.value }))}
+                />
+              )}
+              <button className="primary" onClick={() => resolve(d)}>{d.status === 'resolved' ? 'עדכן הכרעה' : '🏁 הכרע'}</button>
+              <button className="ghost danger" onClick={() => cancel(d)}>בטל</button>
+            </div>
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
 
 function shiftDate(date, days) {
   const d = new Date(`${date}T12:00:00`);
@@ -48,7 +145,7 @@ export default function QuestionsPanel({ architecture, players, today }) {
   const [days, setDays] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
-  const [draft, setDraft] = useState({ componentId: '', text: '', unit: '' });
+  const [draft, setDraft] = useState({ componentId: '', text: '', unit: '', kind: 'number' });
   const [msg, setMsg] = useState('');
 
   const nodeById = useMemo(() => Object.fromEntries(architecture.nodes.map((n) => [n.id, n])), [architecture]);
@@ -83,7 +180,8 @@ export default function QuestionsPanel({ architecture, players, today }) {
   const add = (e) => {
     e.preventDefault();
     if (!draft.text.trim()) return;
-    run(adminApi.post('/questions', { ...draft, date }).then((res) => { setDraft({ componentId: '', text: '', unit: '' }); return res; }), lateNote);
+    if (draft.text.includes('___')) return flash('❌ בחר רכיב, או השלם את החסר בטקסט');
+    run(adminApi.post('/questions', { ...draft, date }).then((res) => { setDraft((d) => ({ componentId: '', text: '', unit: '', kind: d.kind })); return res; }), lateNote);
   };
 
   const previousDay = days.find((d) => d.date < date);
@@ -148,6 +246,7 @@ export default function QuestionsPanel({ architecture, players, today }) {
                   onBlur={(e) => e.target.value !== q.text && run(adminApi.patch(`/questions/${q.id}`, { text: e.target.value }))}
                 />
                 <div className="q-meta">
+                  <span className="tag">{q.kind === 'yesno' ? '✅ כן/לא' : '🔢 מספר'}</span>
                   {q.componentId && <span className="tag">🧩 {nodeById[q.componentId]?.data.name || 'רכיב שנמחק'}</span>}
                   <span>{q.locked ? '🔒 נעול' : `🟢 פתוח לניחושים עד ${q.lockAt.slice(11)}`}</span>
                   <span>{q.guesses.length} ניחושים</span>
@@ -166,13 +265,21 @@ export default function QuestionsPanel({ architecture, players, today }) {
 
           {questions.length < MAX && (
             <form className="add-question" onSubmit={add}>
+              <div className="kind-toggle">
+                <span className="muted small">סוג השאלה:</span>
+                <button type="button" className={`chip-btn${draft.kind === 'number' ? ' selected' : ''}`} onClick={() => setDraft((d) => ({ ...d, kind: 'number' }))}>🔢 מספר</button>
+                <button type="button" className={`chip-btn${draft.kind === 'yesno' ? ' selected' : ''}`} onClick={() => setDraft((d) => ({ ...d, kind: 'yesno', unit: '' }))}>✅ כן/לא</button>
+                <span className="muted small">{draft.kind === 'yesno' ? 'תשובה נכונה = 50, ואם רוב הצוות טעה +30' : 'ניקוד לפי קרבה לתשובה, עד 100'}</span>
+              </div>
               <ComponentSelect architecture={architecture} value={draft.componentId} onChange={(componentId) => setDraft((d) => ({ ...d, componentId }))} />
               <div className="templates">
-                {TEMPLATES.map((t) => <button type="button" key={t.label} className="chip" onClick={() => applyTemplate(t)}>{t.label}</button>)}
+                {TEMPLATES[draft.kind].map((t) => <button type="button" key={t.label} className="chip" onClick={() => applyTemplate(t)}>{t.label}</button>)}
               </div>
               <div className="row">
                 <input placeholder="טקסט השאלה" value={draft.text} onChange={(e) => setDraft((d) => ({ ...d, text: e.target.value }))} />
-                <input className="unit" placeholder="יחידה" value={draft.unit} onChange={(e) => setDraft((d) => ({ ...d, unit: e.target.value }))} />
+                {draft.kind === 'number' && (
+                  <input className="unit" placeholder="יחידה" value={draft.unit} onChange={(e) => setDraft((d) => ({ ...d, unit: e.target.value }))} />
+                )}
                 <button className="primary" type="submit">+ הוסף</button>
               </div>
             </form>
@@ -195,14 +302,20 @@ export default function QuestionsPanel({ architecture, players, today }) {
                   <div className="answer-head">
                     <span className="q-num">{i + 1}</span>
                     <span className="answer-q">{q.text}</span>
-                    <input
-                      type="number"
-                      className="answer-input"
-                      placeholder="תשובה אמיתית"
-                      value={answers[q.id] ?? ''}
-                      onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}
-                    />
-                    <span className="muted">{q.unit}</span>
+                    {q.kind === 'yesno' ? (
+                      <YesNoPicker value={answers[q.id]} onChange={(v) => setAnswers((a) => ({ ...a, [q.id]: v }))} />
+                    ) : (
+                      <>
+                        <input
+                          type="number"
+                          className="answer-input"
+                          placeholder="תשובה אמיתית"
+                          value={answers[q.id] ?? ''}
+                          onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}
+                        />
+                        <span className="muted">{q.unit}</span>
+                      </>
+                    )}
                     {q.resolved && <span className="ok">✓ פורסם</span>}
                   </div>
                   {q.locked && ranked.length > 0 && (
@@ -212,7 +325,7 @@ export default function QuestionsPanel({ architecture, players, today }) {
                         return (
                           <span className="guess-chip" key={g.id}>
                             <Avatar name={p?.name} photo={p?.photo} size={22} />
-                            {p?.name}: <b>{g.value.toLocaleString()}</b>
+                            {p?.name}: <b>{showValue(q.kind, g.value)}</b>
                             {typeof g.points === 'number' && <span className="pts">+{g.points + (g.bonus || 0)}</span>}
                           </span>
                         );
@@ -225,6 +338,8 @@ export default function QuestionsPanel({ architecture, players, today }) {
             })}
           </section>
         )}
+
+        <DuelsSection date={date} flash={flash} />
       </div>
     </div>
   );
