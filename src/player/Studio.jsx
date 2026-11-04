@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Palette, PartyPopper, Shield, Sparkles, Tag, Trees, Tv, Umbrella } from 'lucide-react';
+import { Check, Palette, PartyPopper, Sparkles, Tag, Trees, Tv } from 'lucide-react';
 import { playerApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 import { Coin } from '../icons.jsx';
@@ -67,8 +67,6 @@ export default function Studio({ me, onChange, notify, onPlace }) {
     if (!window.confirm(`לשלוח את השלט לאישור ב-${catalog.billboardPrice} דינרים? אם הוא לא יאושר, הכסף יחזור אליך.`)) return;
     act(playerApi.post('/billboards', { text: billboard }).then(() => { setBillboard(''); loadBillboards(); }), '📺 השלט נשלח לאישור');
   };
-
-  const prankMeta = me.prank && catalog.pranks.find((p) => p.id === me.prank.type);
 
   return (
     <div className="page-panel narrow studio">
@@ -143,30 +141,6 @@ export default function Studio({ me, onChange, notify, onPlace }) {
               </button>
             </div>
           ))}
-        </div>
-      </section>
-
-      <section className="card">
-        <h3 className="title-with-icon"><Shield size={16} /> הגנה ממתיחות</h3>
-        {me.prank ? (
-          <div className="row wrap">
-            <span>{prankMeta?.emoji} מישהו שם עליך {prankMeta?.label} 😅</span>
-            <button disabled={balance < catalog.prankRemovePrice} onClick={() => act(playerApi.post('/pranks/remove'), '🧽 נוקה!')}>
-              הסר עכשיו ב-<Coin value={catalog.prankRemovePrice} size={12} />
-            </button>
-          </div>
-        ) : <p className="muted small">אין עליך מתיחה כרגע.</p>}
-        <div className="row wrap">
-          {me.umbrella ? (
-            <span className="ok"><Umbrella size={15} /> המטריה פתוחה להיום. אף אחד לא יכול למתוח אותך</span>
-          ) : (
-            <>
-              <span className="muted">מטריה מגינה עליך ממתיחות עד סוף היום.</span>
-              <button disabled={balance < catalog.umbrellaPrice} onClick={() => act(playerApi.post('/umbrella'), '☂️ המטריה פתוחה')}>
-                <Umbrella size={14} /> <Coin value={catalog.umbrellaPrice} size={12} />
-              </button>
-            </>
-          )}
         </div>
       </section>
 

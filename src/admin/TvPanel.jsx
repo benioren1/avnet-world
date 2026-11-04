@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Copy, ExternalLink, Laugh, Megaphone, RefreshCw, Star, Trash2, Tv, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, Megaphone, RefreshCw, Star, Trash2, Tv, X } from 'lucide-react';
 import { adminApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 
 const tvLink = (token) => `${window.location.origin}${window.location.pathname}#/tv?k=${token}`;
 const formatWhen = (iso) => new Date(iso).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
-const PRANK_EMOJI = { hat: '🎩', mustache: '🥸', rain: '🌧️', snail: '🐌' };
 const ANNOUNCEMENT_MAX = 120;
 const IDEAS = ['🎉 ברכות ל', '🏆 כל הכבוד ל', '🎂 יום הולדת שמח ל', '📢 תזכורת: '];
 
@@ -95,13 +94,9 @@ function Announcements() {
 export default function TvPanel({ tvToken, onChange }) {
   const [token, setToken] = useState(tvToken);
   const [billboards, setBillboards] = useState([]);
-  const [pranks, setPranks] = useState([]);
   const [msg, setMsg] = useState('');
 
-  const load = useCallback(() => Promise.all([
-    adminApi.get('/billboards').then(setBillboards),
-    adminApi.get('/pranks').then(setPranks),
-  ]), []);
+  const load = useCallback(() => adminApi.get('/billboards').then(setBillboards), []);
   useEffect(() => { load(); }, [load]);
 
   const flash = (m) => { setMsg(m); setTimeout(() => setMsg(''), 3000); };
@@ -170,21 +165,6 @@ export default function TvPanel({ tvToken, onChange }) {
             ))}
           </details>
         )}
-      </div>
-
-      <div className="card">
-        <h3 className="title-with-icon"><Laugh size={16} /> יומן מתיחות</h3>
-        <p className="muted small">בפיד המתיחות אנונימיות. רק אתה רואה כאן מי עשה מה. אפשר לכבות מתיחות לגמרי בהגדרות.</p>
-        {!pranks.length && <p className="muted small">עוד לא היו מתיחות.</p>}
-        {pranks.map((p) => (
-          <div className="bonus-row" key={p.id}>
-            <span>{PRANK_EMOJI[p.type]}</span>
-            <div className="bonus-row-main">
-              <span><b>{p.byName}</b> ← {p.targetName}</span>
-              <span className="muted small">{formatWhen(p.at)}{p.removed ? ' · הוסר' : ''}</span>
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );

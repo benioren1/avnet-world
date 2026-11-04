@@ -60,7 +60,6 @@ export default function PlayerApp() {
     levels: me.wallet.levels,
     profile: me.profile,
     decorations: me.decorations,
-    prank: me.prank?.type || null,
     burning: new Set(me.incidents.flatMap((i) => i.componentIds)),
   }), [me]);
 
@@ -146,7 +145,7 @@ export default function PlayerApp() {
     <div className="app player">
       <header className="topbar">
         <div className="brand">
-          <Avatar name={me.player.name} photo={me.player.photo} size={42} crown={myRank === 1} frame={me.profile.frame} prank={me.prank?.type} />
+          <Avatar name={me.player.name} photo={me.player.photo} size={42} crown={myRank === 1} frame={me.profile.frame} />
           <div>
             <h1>{me.player.name}</h1>
             <div className="brand-sub">
@@ -208,7 +207,7 @@ export default function PlayerApp() {
         )}
         {tab === 'shop' && <Shop architecture={architecture} owned={myCity.owned} balance={me.wallet.balance} onBuy={buy} />}
         {tab === 'studio' && <Studio me={me} onChange={refresh} notify={notify} onPlace={startPlacing} />}
-        {tab === 'board' && <Leaderboard key={tick} board={board} me={me} onVisit={visit} onChange={refresh} notify={notify} />}
+        {tab === 'board' && <Leaderboard key={tick} board={board} me={me} onVisit={visit} />}
       </main>
 
       {toast && <div className="toast">{toast}</div>}

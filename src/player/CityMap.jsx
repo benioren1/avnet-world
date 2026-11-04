@@ -15,7 +15,7 @@ const nodeTypes = { component: ComponentNode, decoration: DecorationNode };
 const edgeTypes = { flow: FlowEdge };
 const LEVEL_LABEL = { 1: 'רגיל', 2: 'משודרג ⭐', 3: 'אגדי ⭐⭐' };
 
-// city: { player, owned (Set), value, levels, profile, decorations, prank, burning (Set) }
+// city: { player, owned (Set), value, levels, profile, decorations, burning (Set) }
 // mine: extra data when this is the viewer's own city ({ paid }), null when visiting.
 function CityCanvas({
   architecture, city, mine, catalog, balance, incidents, vote, justBought, placing,
@@ -51,9 +51,9 @@ function CityCanvas({
   const edges = useMemo(() => architecture.edges.map((e) => {
     const lit = owned.has(e.source) && owned.has(e.target) && !burning.has(e.source) && !burning.has(e.target);
     return lit
-      ? { ...e, type: 'flow', className: 'lit', data: { snail: city.prank === 'snail' } }
+      ? { ...e, type: 'flow', className: 'lit' }
       : { ...e, type: 'smoothstep', className: 'dark', label: '' };
-  }), [architecture, owned, burning, city.prank]);
+  }), [architecture, owned, burning]);
 
   const total = architecture.nodes.length;
   const coverage = total ? Math.round((owned.size / total) * 100) : 0;
@@ -151,11 +151,6 @@ function CityCanvas({
               maskColor="var(--minimap-mask)"
             />
           </ReactFlow>
-          {city.prank === 'rain' && (
-            <div className="rain" aria-hidden="true">
-              {Array.from({ length: 60 }, (_, i) => <i key={i} style={{ '--x': `${(i * 37) % 100}%`, '--d': `${0.6 + (i % 7) * 0.12}s`, '--delay': `${(i % 10) * 0.15}s` }} />)}
-            </div>
-          )}
           {owned.size === 0 && (
             <div className="city-empty" dir="rtl">
               <Building2 size={20} />

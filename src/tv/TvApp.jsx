@@ -34,7 +34,7 @@ function BoardSlide({ board }) {
         {rows.map((r, i) => (
           <div className={`tv-row${i === 0 && r.value > 0 ? ' leader' : ''}`} key={r.id} style={{ '--i': i }}>
             <span className="tv-rank">{r.value > 0 ? MEDALS[i] || i + 1 : i + 1}</span>
-            <Avatar name={r.name} photo={r.photo} size={56} crown={i === 0 && r.value > 0} frame={r.frame} prank={r.prank} />
+            <Avatar name={r.name} photo={r.photo} size={56} crown={i === 0 && r.value > 0} frame={r.frame} />
             <div className="tv-name">
               <b>{r.name}</b>
               <span>{r.cityName || `${r.ownedCount}/${board.totalComponents} רכיבים`}</span>
@@ -65,7 +65,7 @@ function CitySlide({ state }) {
   ];
   const edges = architecture.edges.map((e) => {
     const lit = owned.has(e.source) && owned.has(e.target) && !burning.has(e.source) && !burning.has(e.target);
-    return lit ? { ...e, type: 'flow', data: { snail: leader.prank === 'snail' } } : { ...e, type: 'smoothstep', className: 'dark', label: '' };
+    return lit ? { ...e, type: 'flow' } : { ...e, type: 'smoothstep', className: 'dark', label: '' };
   });
 
   return (

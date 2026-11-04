@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bird, Coins, Heart, Laugh, Pickaxe, Save, Settings, Siren, Sun } from 'lucide-react';
+import { Bird, Coins, Heart, Pickaxe, Save, Settings, Siren, Sun } from 'lucide-react';
 import { adminApi } from '../api.js';
 
 const DAYS = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
@@ -105,15 +105,6 @@ export default function SettingsPanel({ settings, store, onChange }) {
           <span className="setting-label">סגירה ידנית</span>
           <button onClick={closeVote}>🏆 סגור את ההצבעה של השבוע עכשיו</button>
         </div>
-      </section>
-
-      <section className="card settings-grid">
-        <h3 className="title-with-icon"><Laugh size={16} /> מתיחות</h3>
-        <label className="check">
-          <input type="checkbox" checked={s.pranksEnabled} onChange={(e) => setS({ ...s, pranksEnabled: e.target.checked })} />
-          מתיחות פעילות
-        </label>
-        <span className="muted small">כבה ליום שבו זה לא מתאים, למשל אחרי תקלה רצינית. מתיחות שכבר פעילות נשארות עד שהן נגמרות.</span>
       </section>
 
       <div className="card form-card">

@@ -22,13 +22,11 @@
 button.danger-btn { background: linear-gradient(135deg, #ef4444, #f97316); color: #fff; border-color: transparent; font-weight: 600; }
 .none-avatar { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--panel-3); color: var(--muted); }
 
-/* ---------- avatar frames & pranks ---------- */
+/* ---------- avatar frames ---------- */
 .avatar.frame-neon { box-shadow: 0 0 0 2px #22d3ee, 0 0 12px #f472b6, 0 0 22px rgba(34, 211, 238, 0.5); }
 .avatar.frame-fire { box-shadow: 0 0 0 2px #f97316, 0 0 14px #ef4444; animation: fire-flicker 1.2s infinite alternate; }
 .avatar.frame-gold { box-shadow: 0 0 0 3px #fbbf24, 0 0 14px rgba(251, 191, 36, 0.7); }
 @keyframes fire-flicker { from { box-shadow: 0 0 0 2px #f97316, 0 0 10px #ef4444; } to { box-shadow: 0 0 0 2px #fbbf24, 0 0 20px #f97316; } }
-.prank-hat { position: absolute; top: -0.62em; left: 50%; transform: translateX(-50%) rotate(8deg); line-height: 1; pointer-events: none; }
-.prank-mustache { position: absolute; top: 52%; left: 50%; transform: translate(-50%, -50%); line-height: 1; pointer-events: none; filter: brightness(0.2); }
 
 /* ---------- component levels, fire, celebrations ---------- */
 .lvl-stars { display: inline-flex; gap: 1px; color: #fbbf24; margin-inline-start: 5px; vertical-align: middle; }
@@ -109,13 +107,10 @@ button.upgrade-btn:hover:not(:disabled) { background: linear-gradient(135deg, #f
   display: flex; gap: 8px; align-items: flex-start; padding: 10px; border-radius: 10px;
   background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; font-size: 13px;
 }
-.rain { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 3; background: rgba(30, 40, 70, 0.25); }
-.rain i {
   position: absolute; top: -20px; left: var(--x); width: 2px; height: 18px;
   background: linear-gradient(transparent, rgba(160, 200, 255, 0.8));
   animation: rain var(--d) linear var(--delay) infinite;
 }
-@keyframes rain { to { transform: translateY(110vh); } }
 .flow-dot { fill: var(--particle, #b9ffe9); filter: drop-shadow(0 0 4px var(--particle, #2dd4a0)); }
 .flow-line { stroke: var(--particle, var(--success)) !important; }
 .flow-glow { stroke: var(--particle, var(--success)); }
@@ -216,10 +211,6 @@ button.upgrade-btn:hover:not(:disabled) { background: linear-gradient(135deg, #f
 .feed-incident, .feed-incident-resolved { color: #fca5a5; }
 .feed-gold, .feed-vote { color: #fde68a; }
 
-/* ---------- pranks dialog ---------- */
-.prank-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-.prank-option { flex-direction: column; padding: 14px 8px; gap: 6px; }
-.prank-emoji { font-size: 30px; }
 
 /* ---------- studio ---------- */
 .studio section h3 { margin: 0 0 12px; }
@@ -359,7 +350,6 @@ button.upgrade-btn:hover:not(:disabled) { background: linear-gradient(135deg, #f
 @keyframes ticker { to { transform: translateX(50%); } }
 
 @media (max-width: 800px) {
-  .prank-list { grid-template-columns: 1fr 1fr; }
   .billboard-form { flex-wrap: wrap; }
   .mine-reward { left: 0; transform: none; }
 }

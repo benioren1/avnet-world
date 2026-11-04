@@ -7,8 +7,7 @@ function colorFor(name = '') {
 }
 
 // frame: cosmetic border bought in the studio ('none' | 'neon' | 'fire' | 'gold').
-// prank: a friend's prank shown on top of the picture ('hat' | 'mustache').
-export default function Avatar({ name, photo, size = 36, crown = false, frame = 'none', prank = null }) {
+export default function Avatar({ name, photo, size = 36, crown = false, frame = 'none' }) {
   const initials = (name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('');
   return (
     <span
@@ -17,8 +16,6 @@ export default function Avatar({ name, photo, size = 36, crown = false, frame = 
     >
       {photo ? <img src={photo} alt={name} /> : initials}
       {crown && <span className="crown" style={{ fontSize: size * 0.5 }}>👑</span>}
-      {prank === 'hat' && <span className="prank-hat" style={{ fontSize: size * 0.62 }}>🎩</span>}
-      {prank === 'mustache' && <span className="prank-mustache" style={{ fontSize: size * 0.5 }}>〰️</span>}
     </span>
   );
 }

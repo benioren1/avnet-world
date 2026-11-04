@@ -42,18 +42,6 @@ export const DECORATIONS = [
   { id: 'statue', label: 'פסל שלך', emoji: '🗿', price: 600 },
 ];
 
-export const PRANKS = [
-  { id: 'hat', label: 'כובע', emoji: '🎩', price: 100, verb: 'שם/ה כובע ל' },
-  { id: 'mustache', label: 'שפם', emoji: '🥸', price: 100, verb: 'הדביק/ה שפם ל' },
-  { id: 'rain', label: 'גשם על העיר', emoji: '🌧️', price: 150, verb: 'הוריד/ה גשם על העיר של' },
-  { id: 'snail', label: 'חילזון בחיבורים', emoji: '🐌', price: 120, verb: 'שחרר/ה חילזונות בעיר של' },
-];
-
-export const PRANK_REMOVE_PRICE = 80;
-export const UMBRELLA_PRICE = 60;
-export const PRANK_HOURS = 24;
-export const MAX_PRANKS_PER_DAY = 2;
-
 export const BILLBOARD_PRICE = 300;
 export const BILLBOARD_MAX_CHARS = 80;
 
@@ -75,9 +63,8 @@ export const DEFAULT_PROFILE = { theme: 'blueprint', particle: 'mint', celebrati
 export function catalog() {
   return {
     themes: THEMES, particles: PARTICLES, celebrations: CELEBRATIONS, frames: FRAMES,
-    decorations: DECORATIONS, pranks: PRANKS, namingPrice: NAMING_PRICE,
-    prankRemovePrice: PRANK_REMOVE_PRICE, umbrellaPrice: UMBRELLA_PRICE, prankHours: PRANK_HOURS,
-    maxPranksPerDay: MAX_PRANKS_PER_DAY, billboardPrice: BILLBOARD_PRICE, billboardMaxChars: BILLBOARD_MAX_CHARS,
+    decorations: DECORATIONS, namingPrice: NAMING_PRICE,
+    billboardPrice: BILLBOARD_PRICE, billboardMaxChars: BILLBOARD_MAX_CHARS,
     upgradeCostMult: UPGRADE_COST_MULT, levelIncomeMult: LEVEL_INCOME_MULT,
   };
 }

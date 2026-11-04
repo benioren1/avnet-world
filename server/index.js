@@ -45,7 +45,6 @@ const DEFAULT_SETTINGS = {
   incomeRate: 0.02,
   payoutTime: '18:00',
   incidentBonus: 200,
-  pranksEnabled: true,
   voteDay: 4, // Thursday
   voteBonus: 300,
 };
@@ -92,7 +91,7 @@ const publicPlayer = ({ token, ...p }) => p;
 
 // Balance is derived (earned - spent), so re-scoring a day never double-counts.
 // Spending is split in two: components (purchases) and everything else (the "spend"
-// collection: upgrades, cosmetics, pranks, billboards). Only components and their
+// collection: upgrades, cosmetics, billboards). Only components and their
 // upgrades count toward the city's value on the leaderboard.
 async function wallet(playerId) {
   const [guesses, bonuses, purchases, spends] = await Promise.all([
@@ -184,7 +183,7 @@ admin.use(requireAdmin);
 const play = express.Router();
 play.use((req, res, next) => requirePlayer(req, res, next).catch(next));
 
-// Season 2 features (mining, incidents, upgrades, cosmetics, pranks, TV...) live in their own module.
+// Season 2 features (mining, incidents, upgrades, cosmetics, TV...) live in their own module.
 const season2 = createSeason2({
   db, newId, newToken, nowLocal, today, getMeta, setMeta, getSettings, getArchitecture,
   addEvent, wallet, wrap, fail, publicPlayer, isLocked, lockAtFor, leaderboard,
@@ -248,7 +247,6 @@ admin.put('/settings', wrap(async (req, res) => {
     if (!Number.isFinite(v) || v < min || v > max) throw fail(400, `ערך לא תקין: ${key}`);
     next[key] = v;
   }
-  if ('pranksEnabled' in req.body) next.pranksEnabled = Boolean(req.body.pranksEnabled);
   if ('workDays' in req.body) {
     const days = req.body.workDays;
     if (!Array.isArray(days) || days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) throw fail(400, 'ימי עבודה לא תקינים');
@@ -312,8 +310,6 @@ admin.delete('/bonuses/:id', wrap(async (req, res) => {
 admin.delete('/players/:id', wrap(async (req, res) => {
   const playerId = req.params.id;
   for (const c of ['guesses', 'purchases', 'bonuses', 'spend', 'billboards']) await db.deleteMany(c, { playerId });
-  await db.deleteMany('pranks', { target: playerId });
-  await db.deleteMany('pranks', { by: playerId });
   await db.deleteMany('votes', { voter: playerId });
   await db.deleteMany('votes', { target: playerId });
   await db.deleteMany('players', { id: playerId });

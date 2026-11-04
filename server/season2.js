@@ -1,12 +1,12 @@
 // Season 2 features, kept apart from the core game (index.js):
-// mining, incidents, passive income + upgrades, cosmetics, decorations, pranks,
+// mining, incidents, passive income + upgrades, cosmetics, decorations,
 // billboards, the weekly "most beautiful city" vote, and the office TV screen.
 // See docs/season-2.md for the product spec.
 
 import express from 'express';
 import {
-  BILLBOARD_MAX_CHARS, BILLBOARD_PRICE, DECORATIONS, DEFAULT_PROFILE, LEVEL_INCOME_MULT, MAX_PRANKS_PER_DAY,
-  PRANK_HOURS, PRANK_REMOVE_PRICE, PRANKS, UMBRELLA_PRICE, UNLOCKABLES, UPGRADE_COST_MULT, catalog,
+  BILLBOARD_MAX_CHARS, BILLBOARD_PRICE, DECORATIONS, DEFAULT_PROFILE, LEVEL_INCOME_MULT,
+  UNLOCKABLES, UPGRADE_COST_MULT, catalog,
 } from './catalog.js';
 import { addDays, isWorkDay, streakBefore, weekKey, weekday } from './calendar.js';
 
@@ -31,7 +31,7 @@ export function createSeason2(ctx) {
 
   // ---------- spending ----------
   // Charges the player for a non-component item. A fixed id makes one-off items
-  // (a theme, today's umbrella) impossible to buy twice even with a double click.
+  // (a theme, an upgrade level) impossible to buy twice even with a double click.
   async function charge(player, { kind, ref = '', price, id = newId('s'), extra = {} }) {
     const w = await wallet(player.id);
     if (w.balance < price) throw fail(400, `חסרים לך ${price - w.balance} דינרים`);
@@ -57,13 +57,6 @@ export function createSeason2(ctx) {
   async function burningSet() {
     return new Set((await openIncidents()).flatMap((i) => i.componentIds));
   }
-
-  // ---------- pranks ----------
-  async function activePrankOn(playerId) {
-    const now = nowIso();
-    return (await db.find('pranks', { target: playerId })).find((p) => !p.removed && p.until > now) || null;
-  }
-  const umbrellaId = (playerId, date = today()) => `${playerId}:${date}:umbrella`;
 
   // ---------- mining ----------
   async function mineGeneral() {
@@ -185,7 +178,6 @@ export function createSeason2(ctx) {
   // ---------- shared views ----------
   async function cityOf(player) {
     const w = await wallet(player.id);
-    const prank = await activePrankOn(player.id);
     return {
       player: publicPlayer(player),
       owned: w.owned,
@@ -193,21 +185,17 @@ export function createSeason2(ctx) {
       levels: w.levels,
       profile: profileOf(player),
       decorations: await decorationsOf(player.id),
-      prank: prank?.type || null,
       burning: [...(await burningSet())],
     };
   }
 
   async function playerBadges(player) {
-    const prank = await activePrankOn(player.id);
     const profile = profileOf(player);
-    return { titles: await titlesFor(player), prank: prank?.type || null, frame: profile.frame, cityName: profile.cityName };
+    return { titles: await titlesFor(player), frame: profile.frame, cityName: profile.cityName };
   }
 
   async function meExtras(player) {
     const s = await getSettings();
-    const prank = await activePrankOn(player.id);
-    const pranksToday = (await db.find('pranks', { by: player.id, date: today() })).length;
     const spends = await db.find('spend', { playerId: player.id });
     return {
       profile: profileOf(player),
@@ -215,12 +203,9 @@ export function createSeason2(ctx) {
       decorations: await decorationsOf(player.id),
       mining: await miningStatus(player),
       incidents: await incidentsView(),
-      prank: prank ? { type: prank.type, until: prank.until } : null,
-      umbrella: Boolean(await db.findOne('spend', { id: umbrellaId(player.id) })),
-      pranksToday,
       titles: await titlesFor(player),
       vote: await voteState(player),
-      rules: { earlyTime: s.earlyTime, earlyBonus: s.earlyBonus, pranksEnabled: s.pranksEnabled, incomeRate: s.incomeRate, payoutTime: s.payoutTime },
+      rules: { earlyTime: s.earlyTime, earlyBonus: s.earlyBonus, incomeRate: s.incomeRate, payoutTime: s.payoutTime },
       catalog: catalog(),
     };
   }
@@ -352,44 +337,6 @@ export function createSeason2(ctx) {
       const y = Number(req.body.y);
       if (!Number.isFinite(x) || !Number.isFinite(y)) throw fail(400, 'מיקום לא תקין');
       await db.updateOne('spend', { id: d.id }, { x, y });
-      res.json({ ok: true });
-    }));
-
-    // ===== pranks =====
-    play.post('/pranks', wrap(async (req, res) => {
-      const s = await getSettings();
-      if (!s.pranksEnabled) throw fail(400, 'המתיחות כבויות כרגע');
-      const prank = PRANKS.find((p) => p.id === req.body.type);
-      if (!prank) throw fail(404, 'מתיחה לא נמצאה');
-      const target = await db.findOne('players', { id: req.body.targetId });
-      if (!target || target.active === false) throw fail(404, 'שחקן לא נמצא');
-      if (target.id === req.player.id) throw fail(400, 'אי אפשר למתוח את עצמך 😄');
-      if (await db.findOne('spend', { id: umbrellaId(target.id) })) throw fail(400, `${target.name} פתח/ה מטריה היום ☂️`);
-      if (await activePrankOn(target.id)) throw fail(400, `על ${target.name} כבר יש מתיחה פעילה`);
-      const mineToday = await db.find('pranks', { by: req.player.id, date: today() });
-      if (mineToday.length >= MAX_PRANKS_PER_DAY) throw fail(400, `אפשר עד ${MAX_PRANKS_PER_DAY} מתיחות ביום`);
-
-      const id = newId('pr');
-      await charge(req.player, { kind: 'prank', ref: prank.id, price: prank.price, extra: { prankId: id, target: target.id } });
-      await db.insertOne('pranks', {
-        id, by: req.player.id, target: target.id, type: prank.id, date: today(), at: nowIso(),
-        until: new Date(Date.now() + PRANK_HOURS * 3600000).toISOString(), removed: false,
-      });
-      // The feed stays anonymous; the admin sees who did it in the prank log.
-      await addEvent('prank', `${prank.emoji} מישהו ${prank.verb}${target.name}`, null, { prankId: id });
-      res.json({ ok: true });
-    }));
-
-    play.post('/pranks/remove', wrap(async (req, res) => {
-      const prank = await activePrankOn(req.player.id);
-      if (!prank) throw fail(400, 'אין עליך מתיחה פעילה');
-      await charge(req.player, { kind: 'prank-remove', ref: prank.id, price: PRANK_REMOVE_PRICE });
-      await db.updateOne('pranks', { id: prank.id }, { removed: true, removedAt: nowIso() });
-      res.json({ ok: true });
-    }));
-
-    play.post('/umbrella', wrap(async (req, res) => {
-      await charge(req.player, { kind: 'umbrella', price: UMBRELLA_PRICE, id: umbrellaId(req.player.id) });
       res.json({ ok: true });
     }));
 
@@ -525,13 +472,7 @@ export function createSeason2(ctx) {
       res.json({ ok: true });
     }));
 
-    // ===== admin: pranks log, payout, vote, TV =====
-    admin.get('/pranks', wrap(async (req, res) => {
-      const players = Object.fromEntries((await db.find('players')).map((p) => [p.id, p.name]));
-      const list = (await db.find('pranks')).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 50);
-      res.json(list.map((p) => ({ ...p, byName: players[p.by], targetName: players[p.target] })));
-    }));
-
+    // ===== admin: payout, vote, TV =====
     admin.post('/payout', wrap(async (req, res) => res.json(await runPayout(today()))));
     admin.post('/vote/close', wrap(async (req, res) => res.json(await closeVote(weekKey(today())))));
     admin.post('/tv/reset', wrap(async (req, res) => {
