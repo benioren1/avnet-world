@@ -324,6 +324,38 @@ button.upgrade-btn:hover:not(:disabled) { background: linear-gradient(135deg, #f
 .tv-ticker-track { display: flex; gap: 60px; white-space: nowrap; animation: ticker calc(var(--n) * 7s) linear infinite; padding-inline-start: 100%; }
 .tv-ticker-track span { display: inline-flex; align-items: center; gap: 10px; font-size: 20px; }
 .tv-billboard { color: #fde68a; font-weight: 700; }
+.tv-announce {
+  color: #fff; font-weight: 700; padding: 4px 16px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.tv-announce-slide {
+  position: relative; align-items: center; justify-content: center; text-align: center; overflow: hidden;
+  background: radial-gradient(ellipse at 50% 40%, rgba(139, 92, 246, 0.35), transparent 70%);
+  border-radius: 24px; margin-bottom: 18px;
+}
+.tv-announce-icon { color: #c4b5fd; animation: announce-bounce 1.6s ease-in-out infinite; position: relative; z-index: 1; }
+@keyframes announce-bounce { 50% { transform: translateY(-10px) rotate(-6deg); } }
+.tv-announce-text {
+  position: relative; z-index: 1; margin: 0; max-width: 90%;
+  font-size: clamp(36px, 5.2vw, 80px); font-weight: 800; line-height: 1.25;
+  background: linear-gradient(90deg, #fff, #c4b5fd, #fde68a, #fff); background-size: 300% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: announce-shine 6s linear infinite;
+}
+@keyframes announce-shine { to { background-position: 300% 0; } }
+.tv-confetti { position: absolute; inset: 0; pointer-events: none; }
+.tv-confetti i {
+  position: absolute; top: -20px; left: var(--x); width: 10px; height: 16px; border-radius: 2px;
+  animation: confetti-fall var(--d) linear var(--delay) infinite;
+}
+.tv-confetti i:nth-child(4n) { background: #fbbf24; }
+.tv-confetti i:nth-child(4n + 1) { background: #f472b6; }
+.tv-confetti i:nth-child(4n + 2) { background: #22d3ee; }
+.tv-confetti i:nth-child(4n + 3) { background: #a78bfa; }
+@keyframes confetti-fall { to { transform: translateY(110vh) rotate(720deg); } }
+.announce-form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.announce-options { align-items: center; }
+.announce-options select { width: auto; }
 @keyframes ticker { to { transform: translateX(50%); } }
 
 @media (max-width: 800px) {

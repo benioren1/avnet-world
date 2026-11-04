@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ReactFlow, ReactFlowProvider, Background, BackgroundVariant } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { AlertTriangle, Building2, Clock, Pickaxe, Sun, Trophy, Tv } from 'lucide-react';
+import { AlertTriangle, Building2, Clock, Megaphone, Pickaxe, Sun, Trophy, Tv } from 'lucide-react';
 import { tvApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 import ComponentNode, { DecorationNode, EditorContext } from '../ComponentNode.jsx';
@@ -126,6 +126,19 @@ function TodaySlide({ state }) {
   );
 }
 
+// A featured announcement from the admin, big and celebratory.
+function AnnouncementSlide({ announcement }) {
+  return (
+    <div className="tv-slide tv-announce-slide">
+      <div className="tv-confetti" aria-hidden="true">
+        {Array.from({ length: 36 }, (_, i) => <i key={i} style={{ '--x': `${(i * 29) % 100}%`, '--d': `${2.5 + (i % 5) * 0.6}s`, '--delay': `${(i % 9) * 0.3}s` }} />)}
+      </div>
+      <Megaphone size={64} className="tv-announce-icon" />
+      <p className="tv-announce-text">{announcement.text}</p>
+    </div>
+  );
+}
+
 function IncidentSlide({ incidents }) {
   return (
     <div className="tv-slide tv-incident">
@@ -171,12 +184,16 @@ export default function TvApp() {
   }
   if (!state) return <div className="center-page tv muted">טוען...</div>;
 
-  // An open incident takes over every other slide.
-  const slides = state.incidents.length
-    ? ['incident', 'board', 'incident', 'city']
-    : ['board', 'city', 'today'];
+  // An open incident takes over every other slide. Featured announcements get a slide
+  // between the regular ones, taking turns when there are several.
+  const featured = state.announcements.filter((a) => a.featured);
+  const regular = featured.length ? ['board', 'announce', 'city', 'announce', 'today', 'announce'] : ['board', 'city', 'today'];
+  const slides = state.incidents.length ? ['incident', 'board', 'incident', 'city'] : regular;
   const current = slides[slide % slides.length];
+  const announceTurn = Math.floor(slide / slides.length) * slides.filter((s) => s === 'announce').length
+    + slides.slice(0, slide % slides.length).filter((s) => s === 'announce').length;
   const ticker = [
+    ...state.announcements.map((a) => ({ id: a.id, announce: true, text: a.text })),
     ...state.billboards.map((b) => ({ id: b.id, billboard: true, text: b.text, name: b.name, photo: b.photo })),
     ...state.feed.map((e) => ({ id: e.id, text: e.text })),
   ];
@@ -202,15 +219,16 @@ export default function TvApp() {
         {current === 'city' && <CitySlide state={state} />}
         {current === 'today' && <TodaySlide state={state} />}
         {current === 'incident' && <IncidentSlide incidents={state.incidents} />}
+        {current === 'announce' && featured.length > 0 && <AnnouncementSlide announcement={featured[announceTurn % featured.length]} />}
       </main>
 
       {ticker.length > 0 && (
         <footer className="tv-ticker">
           <div className="tv-ticker-track" style={{ '--n': ticker.length }}>
             {[...ticker, ...ticker].map((t, i) => (
-              <span key={`${t.id}-${i}`} className={t.billboard ? 'tv-billboard' : ''}>
+              <span key={`${t.id}-${i}`} className={t.announce ? 'tv-announce' : t.billboard ? 'tv-billboard' : ''}>
                 {t.billboard && <Avatar name={t.name} photo={t.photo} size={30} />}
-                {t.billboard ? `📺 ${t.text}` : t.text}
+                {t.announce ? `📢 ${t.text}` : t.billboard ? `📺 ${t.text}` : t.text}
               </span>
             ))}
           </div>

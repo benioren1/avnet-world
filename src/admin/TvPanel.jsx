@@ -1,11 +1,96 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Check, Copy, ExternalLink, Laugh, RefreshCw, Tv, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, Laugh, Megaphone, RefreshCw, Star, Trash2, Tv, X } from 'lucide-react';
 import { adminApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 
 const tvLink = (token) => `${window.location.origin}${window.location.pathname}#/tv?k=${token}`;
 const formatWhen = (iso) => new Date(iso).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
 const PRANK_EMOJI = { hat: '🎩', mustache: '🥸', rain: '🌧️', snail: '🐌' };
+const ANNOUNCEMENT_MAX = 120;
+const IDEAS = ['🎉 ברכות ל', '🏆 כל הכבוד ל', '🎂 יום הולדת שמח ל', '📢 תזכורת: '];
+
+// Messages the admin writes for the office TV: they run in the ticker, and "featured"
+// ones also get a big slide on the main screen.
+function Announcements() {
+  const [list, setList] = useState([]);
+  const [text, setText] = useState('');
+  const [featured, setFeatured] = useState(true);
+  const [duration, setDuration] = useState('today');
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => adminApi.get('/announcements').then(setList), []);
+  useEffect(() => { load(); }, [load]);
+
+  const add = (e) => {
+    e.preventDefault();
+    adminApi.post('/announcements', { text, featured, duration })
+      .then(() => { setText(''); setError(''); load(); })
+      .catch((err) => setError(err.message));
+  };
+  const toggle = (a) => adminApi.patch(`/announcements/${a.id}`, { featured: !a.featured }).then(load);
+  const remove = (a) => adminApi.del(`/announcements/${a.id}`).then(load);
+
+  const active = list.filter((a) => a.active);
+  const expired = list.filter((a) => !a.active).slice(0, 5);
+
+  return (
+    <div className="card">
+      <h3 className="title-with-icon"><Megaphone size={16} /> הודעות על המסך</h3>
+      <p className="muted small">משפטים שלך שרצים בפס התחתון של הטלוויזיה. הודעה "מודגשת" מקבלת גם מסך גדול משלה בין המסכים המתחלפים, עם חגיגה.</p>
+      <form className="announce-form" onSubmit={add}>
+        <div className="row wrap">
+          {IDEAS.map((idea) => (
+            <button type="button" key={idea} className="chip-btn" onClick={() => setText(idea)}>{idea.trim()}</button>
+          ))}
+        </div>
+        <input
+          maxLength={ANNOUNCEMENT_MAX}
+          placeholder="למשל: 🎉 ברכות לחני שמצאה היום באג מטורף ברכיב הקליטה!"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <div className="row wrap announce-options">
+          <label className="check">
+            <input type="checkbox" checked={featured} onChange={(e) => setFeatured(e.target.checked)} />
+            <Star size={14} /> להדגיש גם במסך הראשי
+          </label>
+          <select value={duration} onChange={(e) => setDuration(e.target.value)}>
+            <option value="today">רק היום</option>
+            <option value="forever">עד שאמחק</option>
+          </select>
+          <span className="muted small">{text.length}/{ANNOUNCEMENT_MAX}</span>
+          <button className="primary" type="submit" disabled={!text.trim()}><Megaphone size={15} /> הצג על המסך</button>
+        </div>
+        {error && <span className="msg-error">{error}</span>}
+      </form>
+
+      {active.map((a) => (
+        <div className="bonus-row" key={a.id}>
+          <span>{a.featured ? '⭐' : '📢'}</span>
+          <div className="bonus-row-main">
+            <b>{a.text}</b>
+            <span className="muted small">{a.until ? 'רק היום' : 'עד שתמחק'}{a.featured ? ' · מודגשת במסך הראשי' : ' · רק בפס התחתון'}</span>
+          </div>
+          <button className="ghost" onClick={() => toggle(a)} title={a.featured ? 'הפסק להדגיש' : 'הדגש במסך הראשי'}>
+            <Star size={15} fill={a.featured ? 'currentColor' : 'none'} />
+          </button>
+          <button className="ghost danger icon-btn" onClick={() => remove(a)} aria-label="מחק הודעה"><Trash2 size={15} /></button>
+        </div>
+      ))}
+      {expired.length > 0 && (
+        <details className="decided">
+          <summary className="muted small">הודעות שנגמרו</summary>
+          {expired.map((a) => (
+            <div className="bonus-row" key={a.id}>
+              <span className="muted">{a.text}</span>
+              <button className="ghost danger icon-btn" onClick={() => remove(a)} aria-label="מחק הודעה"><Trash2 size={14} /></button>
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
 
 export default function TvPanel({ tvToken, onChange }) {
   const [token, setToken] = useState(tvToken);
@@ -57,6 +142,8 @@ export default function TvPanel({ tvToken, onChange }) {
           <button className="ghost" onClick={reset}><RefreshCw size={15} /> קישור חדש</button>
         </div>
       </div>
+
+      <Announcements />
 
       <div className="card">
         <h3>שלטים שמחכים לאישור {pending.length > 0 && <span className="count-pill">{pending.length}</span>}</h3>

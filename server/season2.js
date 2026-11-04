@@ -17,6 +17,7 @@ const MINE_STREAK_STEP = 5;
 const MAX_DECORATIONS = 30;
 const EARLY_BIRD_TITLE_AT = 10;
 const MINER_TITLE_STREAK = 5;
+const ANNOUNCEMENT_MAX_CHARS = 120;
 
 export function createSeason2(ctx) {
   const {
@@ -26,6 +27,7 @@ export function createSeason2(ctx) {
 
   const nowIso = () => new Date().toISOString();
   const time = () => nowLocal().slice(11);
+  const isActive = (announcement) => !announcement.until || announcement.until >= today();
 
   // ---------- spending ----------
   // Charges the player for a non-component item. A fixed id makes one-off items
@@ -489,6 +491,40 @@ export function createSeason2(ctx) {
       res.json({ ok: true });
     }));
 
+    // ===== admin: TV announcements =====
+    // Free messages from the admin ("Congrats to Hani!"). They run in the TV ticker;
+    // featured ones also get a big slide of their own. "today" ones expire at midnight.
+    admin.get('/announcements', wrap(async (req, res) => {
+      const list = (await db.find('announcements')).sort((a, b) => b.at.localeCompare(a.at));
+      res.json(list.map((a) => ({ ...a, active: isActive(a) })));
+    }));
+
+    admin.post('/announcements', wrap(async (req, res) => {
+      const text = String(req.body.text || '').trim();
+      if (!text) throw fail(400, 'כתוב את ההודעה');
+      if (text.length > ANNOUNCEMENT_MAX_CHARS) throw fail(400, `עד ${ANNOUNCEMENT_MAX_CHARS} תווים`);
+      const a = {
+        id: newId('an'), text, featured: Boolean(req.body.featured),
+        until: req.body.duration === 'forever' ? null : today(), at: nowIso(),
+      };
+      await db.insertOne('announcements', a);
+      res.json(a);
+    }));
+
+    admin.patch('/announcements/:id', wrap(async (req, res) => {
+      const a = await db.findOne('announcements', { id: req.params.id });
+      if (!a) throw fail(404, 'הודעה לא נמצאה');
+      const patch = {};
+      if ('featured' in req.body) patch.featured = Boolean(req.body.featured);
+      await db.updateOne('announcements', { id: a.id }, patch);
+      res.json({ ...a, ...patch });
+    }));
+
+    admin.delete('/announcements/:id', wrap(async (req, res) => {
+      await db.deleteMany('announcements', { id: req.params.id });
+      res.json({ ok: true });
+    }));
+
     // ===== admin: pranks log, payout, vote, TV =====
     admin.get('/pranks', wrap(async (req, res) => {
       const players = Object.fromEntries((await db.find('players')).map((p) => [p.id, p.name]));
@@ -529,8 +565,12 @@ export function createSeason2(ctx) {
       const billboards = (await db.find('billboards', { status: 'approved', date }))
         .map((b) => ({ id: b.id, text: b.text, name: players[b.playerId]?.name, photo: players[b.playerId]?.photo }));
       const feed = (await db.find('events')).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 15);
+      const announcements = (await db.find('announcements')).filter(isActive)
+        .sort((a, b) => a.at.localeCompare(b.at))
+        .map(({ id, text, featured }) => ({ id, text, featured }));
       res.json({
         now: time(),
+        announcements,
         board,
         architecture: await getArchitecture(),
         leader,

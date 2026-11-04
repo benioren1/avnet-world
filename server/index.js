@@ -598,8 +598,11 @@ app.use('/api', play);
 const dist = path.resolve('dist');
 const servesFrontend = fs.existsSync(dist);
 if (servesFrontend) {
-  app.use(express.static(dist));
-  app.get('*', (req, res) => res.sendFile(path.join(dist, 'index.html')));
+  // index.html must never be cached, or browsers keep running an old version after an update.
+  // The JS/CSS files have a content hash in their name, so they can be cached safely.
+  const noCache = (res) => res.setHeader('Cache-Control', 'no-cache');
+  app.use(express.static(dist, { setHeaders: (res, file) => { if (file.endsWith('.html')) noCache(res); } }));
+  app.get('*', (req, res) => { noCache(res); res.sendFile(path.join(dist, 'index.html')); });
 }
 
 season2.startJobs();
