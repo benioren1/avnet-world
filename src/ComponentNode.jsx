@@ -3,6 +3,7 @@ import { Handle, Position } from '@xyflow/react';
 import { Check, Flame, Star } from 'lucide-react';
 import { COMPONENT_TYPES } from './model.js';
 import { Coin, TypeIcon } from './icons.jsx';
+import './city/cityFx.css';
 
 // Shared lookups for every node without threading props through React Flow.
 // owned:      null in the admin editor; a Set of component ids on a player's map.
@@ -10,12 +11,13 @@ import { Coin, TypeIcon } from './icons.jsx';
 // burning:    Set of component ids with an open incident.
 // justBought: id of a component bought a moment ago, to play a short celebration.
 // celebration: which celebration animation the city owner bought.
+// fx:         short-lived city animations by component id (see src/city/useCityFx.js).
 export const EditorContext = createContext({
-  domainsById: {}, highlightDomain: null, owned: null, levels: {}, burning: new Set(), justBought: null, celebration: 'pulse',
+  domainsById: {}, highlightDomain: null, owned: null, levels: {}, burning: new Set(), justBought: null, celebration: 'pulse', fx: null,
 });
 
 function ComponentNode({ id, data, selected }) {
-  const { domainsById, highlightDomain, owned, levels = {}, burning, justBought, celebration } = useContext(EditorContext);
+  const { domainsById, highlightDomain, owned, levels = {}, burning, justBought, celebration, fx: fxById } = useContext(EditorContext);
   const domain = domainsById[data.domainId];
   const type = COMPONENT_TYPES[data.type] || COMPONENT_TYPES.other;
   const color = domain?.color || '#8892a6';
@@ -24,6 +26,7 @@ function ComponentNode({ id, data, selected }) {
   const editable = !owned;
   const level = levels[id] || 1;
   const onFire = burning?.has(id);
+  const fx = fxById?.[id];
 
   const classes = ['comp-node'];
   if (selected) classes.push('selected');
@@ -31,10 +34,15 @@ function ComponentNode({ id, data, selected }) {
   if (ghost) classes.push('ghost');
   if (owned && !ghost) classes.push('owned', `lvl${level}`);
   if (onFire) classes.push('burning');
-  if (justBought === id) classes.push('celebrate', `celebrate-${celebration || 'pulse'}`);
+  if (fx) classes.push(`fx-${fx.kind}`);
+  else if (justBought === id) classes.push('celebrate', `celebrate-${celebration || 'pulse'}`);
+  const burst = celebration && celebration !== 'pulse' && (fx ? fx.kind !== 'visit' : justBought === id);
+  const fxStyle = fx ? { '--domain': color, '--fx-delay': `${fx.delay}ms` } : null;
 
   return (
-    <div className={classes.join(' ')} style={{ '--domain': color }} dir="rtl">
+    <>
+    {fx && <CityFxLayer key={fx.key} kind={fx.kind} level={fx.level} style={fxStyle} />}
+    <div className={classes.join(' ')} style={fxStyle || { '--domain': color }} dir="rtl">
       <Handle type="target" position={Position.Left} isConnectable={editable} />
       <div className="comp-icon"><TypeIcon type={data.type} locked={Boolean(ghost)} /></div>
       <div className="comp-body">
@@ -54,17 +62,31 @@ function ComponentNode({ id, data, selected }) {
         </div>
       </div>
       {onFire && <div className="flames" aria-hidden="true">🔥</div>}
-      {justBought === id && celebration && celebration !== 'pulse' && (
+      {burst && (
         <div className={`burst burst-${celebration}`} aria-hidden="true">
           {Array.from({ length: 10 }, (_, i) => <i key={i} style={{ '--i': i }} />)}
         </div>
       )}
       <Handle type="source" position={Position.Right} isConnectable={editable} />
     </div>
+    {fx && <div key={`f${fx.key}`} className={`fx-flash fx-flash-${fx.kind}`} style={fxStyle} aria-hidden="true" />}
+    </>
   );
 }
 
 export default memo(ComponentNode);
+
+// Light around a card while it builds or upgrades. Sits behind the card, outside its clipping.
+// build: construction scaffold + landing shockwave. upgrade: two expanding rings of light.
+function CityFxLayer({ kind, level, style }) {
+  return (
+    <div className={`city-fx city-fx-${kind}${level === 3 ? ' gold' : ''}`} style={style} aria-hidden="true">
+      {kind === 'upgrade'
+        ? <><i className="fx-ring" /><i className="fx-ring second" /></>
+        : <><i className="fx-scaffold" /><i className="fx-wave" /></>}
+    </div>
+  );
+}
 
 // A decoration (tree, flag, statue...) the city owner placed on the map.
 // The statue shows the owner's face.

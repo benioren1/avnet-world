@@ -10,6 +10,8 @@ import ComponentNode, { DecorationNode, EditorContext } from '../ComponentNode.j
 import FlowEdge from '../FlowEdge.jsx';
 import Avatar from '../Avatar.jsx';
 import { Coin, TypeIcon } from '../icons.jsx';
+import useCityFx from '../city/useCityFx.js';
+import { prefersReducedMotion } from '../city/motion.js';
 
 const nodeTypes = { component: ComponentNode, decoration: DecorationNode };
 const edgeTypes = { flow: FlowEdge };
@@ -18,11 +20,11 @@ const LEVEL_LABEL = { 1: 'רגיל', 2: 'משודרג ⭐', 3: 'אגדי ⭐⭐'
 // city: { player, owned (Set), value, levels, profile, decorations, burning (Set) }
 // mine: extra data when this is the viewer's own city ({ paid }), null when visiting.
 function CityCanvas({
-  architecture, city, mine, catalog, balance, incidents, vote, justBought, placing,
+  architecture, city, mine, catalog, balance, incidents, vote, placing, fx,
   onBuy, onUpgrade, onBack, onVote, onPlace, onMoveDecoration, onCancelPlacing,
 }) {
   const [selectedId, setSelectedId] = useState(null);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, setCenter, getZoom } = useReactFlow();
   const { owned, levels, burning, profile } = city; // levels/burning are read by the nodes via context
   const domainsById = useMemo(() => Object.fromEntries(architecture.domains.map((d) => [d.id, d])), [architecture]);
   const decoMeta = useMemo(() => Object.fromEntries(catalog.decorations.map((d) => [d.id, d])), [catalog]);
@@ -50,12 +52,25 @@ function CityCanvas({
   const shownNodes = useMemo(() => nodes.map((n) => (n.type === 'component' ? { ...n, selected: n.id === selectedId } : n)), [nodes, selectedId]);
 
   // A connection lights up only when both ends are owned and neither is burning.
+  // A connection made a moment ago carries its build animation in data.fx.
   const edges = useMemo(() => architecture.edges.map((e) => {
     const lit = owned.has(e.source) && owned.has(e.target) && !burning.has(e.source) && !burning.has(e.target);
     return lit
-      ? { ...e, type: 'flow', className: 'lit' }
+      ? { ...e, type: 'flow', className: 'lit', data: { ...e.data, fx: fx.edges[e.id] } }
       : { ...e, type: 'smoothstep', className: 'dark', label: '' };
-  }), [architecture, owned, burning]);
+  }), [architecture, owned, burning, fx.edges]);
+
+  // The camera glides to a component that is being built or upgraded, keeping the zoom.
+  useEffect(() => {
+    const node = fx.focus && architecture.nodes.find((n) => n.id === fx.focus.id);
+    if (!node) return;
+    const w = node.measured?.width || node.width || 210;
+    const h = node.measured?.height || node.height || 74;
+    setCenter(node.position.x + w / 2, node.position.y + h / 2, {
+      zoom: Math.max(getZoom(), 0.75), duration: prefersReducedMotion() ? 0 : 900,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fx.focus?.key]);
 
   const total = architecture.nodes.length;
   const coverage = total ? Math.round((owned.size / total) * 100) : 0;
@@ -230,21 +245,22 @@ function CityCanvas({
 }
 
 export default function CityMap(props) {
+  const fx = useCityFx(props);
   return (
-    <EditorContextProvider {...props}>
+    <EditorContextProvider {...props} fx={fx.nodes}>
       <ReactFlowProvider>
-        <CityCanvas {...props} />
+        <CityCanvas {...props} fx={fx} />
       </ReactFlowProvider>
     </EditorContextProvider>
   );
 }
 
 // The node renderer reads ownership, levels and fire from context.
-function EditorContextProvider({ architecture, city, justBought, children }) {
+function EditorContextProvider({ architecture, city, justBought, fx, children }) {
   const domainsById = useMemo(() => Object.fromEntries(architecture.domains.map((d) => [d.id, d])), [architecture]);
   const value = useMemo(() => ({
     domainsById, highlightDomain: null, owned: city.owned, levels: city.levels, burning: city.burning,
-    justBought, celebration: city.profile.celebration,
-  }), [domainsById, city, justBought]);
+    justBought, celebration: city.profile.celebration, fx,
+  }), [domainsById, city, justBought, fx]);
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;
 }
