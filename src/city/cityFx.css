@@ -1,0 +1,119 @@
+/* ---------- the city builds itself ----------
+   Timeline of a purchase (same numbers as FX in useCityFx.js):
+   0-0.35s scaffold appears · 0.35-0.95s the card rises · 0.95s lands with a flash and a shockwave ·
+   from ~1s each new connection draws itself, one after another, then starts carrying particles.
+   Everything below is keyed by classes the map adds for a few seconds only. */
+
+.city-fx, .cfx-flash { position: absolute; inset: 0; pointer-events: none; }
+.city-fx i { position: absolute; inset: 0; border-radius: 14px; }
+
+/* Construction scaffold: dashed blueprint outline with hatching, in the domain color. */
+.cfx-scaffold {
+  inset: -7px !important;
+  border: 2px dashed var(--domain);
+  background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--domain) 22%, transparent) 0 5px, transparent 5px 13px);
+  animation: cfx-scaffold 1.25s ease-out var(--fx-delay, 0ms) both;
+}
+@keyframes cfx-scaffold {
+  0% { opacity: 0; transform: scale(1.08); }
+  28% { opacity: 1; transform: none; }
+  72% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: scale(0.98); }
+}
+
+/* The card rises out of the scaffold and lands. */
+.city .comp-node.cfx-build {
+  overflow: visible;
+  animation: cfx-rise 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.15) calc(var(--fx-delay, 0ms) + 350ms) both;
+}
+@keyframes cfx-rise {
+  0% { opacity: 0; transform: translateY(30px) scale(0.9); }
+  75% { opacity: 1; transform: translateY(-4px) scale(1.02); }
+  100% { opacity: 1; transform: none; }
+}
+
+/* Landing: a flash in the domain color over the card and a shockwave around it. */
+.cfx-flash {
+  inset: -8px;
+  border-radius: 20px;
+  background: radial-gradient(ellipse at center, #fff 0%, var(--domain) 42%, transparent 72%);
+  mix-blend-mode: screen;
+  opacity: 0;
+  animation: cfx-flash 0.6s ease-out calc(var(--fx-delay, 0ms) + 900ms) both;
+}
+@keyframes cfx-flash { 0% { opacity: 0; } 22% { opacity: 0.85; } 100% { opacity: 0; } }
+.cfx-wave {
+  border: 2px solid var(--domain);
+  box-shadow: 0 0 16px var(--domain);
+  opacity: 0;
+  animation: cfx-wave 0.75s ease-out calc(var(--fx-delay, 0ms) + 920ms) both;
+}
+@keyframes cfx-wave { 0% { opacity: 0.95; transform: none; } 100% { opacity: 0; transform: scale(1.22, 1.75); } }
+
+/* The owner's celebration cosmetic (fireworks, confetti...) fires on landing, not before. */
+.city .comp-node.cfx-build .burst i { animation-delay: calc(var(--fx-delay, 0ms) + 900ms); animation-fill-mode: both; }
+.city .comp-node.cfx-upgrade { overflow: visible; }
+
+/* Upgrade to level 2/3: two rings of light expand from the card (gold for level 3). */
+.cfx-ring {
+  border: 3px solid var(--domain);
+  box-shadow: 0 0 22px var(--domain), inset 0 0 12px var(--domain);
+  opacity: 0;
+  animation: cfx-ring 1.1s cubic-bezier(0.15, 0.7, 0.3, 1) var(--fx-delay, 0ms) both;
+}
+.cfx-ring.second { animation-delay: calc(var(--fx-delay, 0ms) + 320ms); }
+.city-fx.gold .cfx-ring { border-color: #fbbf24; box-shadow: 0 0 24px #fbbf24, inset 0 0 12px #fff6c2; }
+@keyframes cfx-ring { 0% { opacity: 1; transform: none; } 100% { opacity: 0; transform: scale(1.3, 1.95); } }
+.cfx-flash-upgrade { animation-delay: var(--fx-delay, 0ms); animation-duration: 0.7s; }
+
+/* Visiting a city: what was bought today plays once, lighter. Nothing hides, the card just hops. */
+.city .comp-node.cfx-visit { animation: cfx-hop 0.6s ease-out calc(var(--fx-delay, 0ms) + 250ms) both; }
+@keyframes cfx-hop { 40% { transform: translateY(-10px); } 70% { transform: translateY(2px); } 100% { transform: none; } }
+.city-fx-visit .cfx-scaffold { animation-duration: 0.85s; opacity: 0.7; }
+.city-fx-visit .cfx-wave { animation-delay: calc(var(--fx-delay, 0ms) + 520ms); }
+.cfx-flash-visit { animation-delay: calc(var(--fx-delay, 0ms) + 500ms); animation-duration: 0.5s; }
+@keyframes cfx-flash-soft { 0% { opacity: 0; } 25% { opacity: 0.45; } 100% { opacity: 0; } }
+.cfx-flash-visit { animation-name: cfx-flash-soft; }
+
+/* ---------- connections ---------- */
+/* A new connection draws itself from the new component outward (pathLength=1 on the path). */
+.flow-draw {
+  fill: none;
+  stroke: var(--particle, var(--success));
+  stroke-width: 4;
+  stroke-dasharray: 1 1;
+  stroke-dashoffset: 1;
+  filter: drop-shadow(0 0 5px var(--particle, var(--success)));
+  pointer-events: none;
+  animation:
+    cfx-draw 0.7s ease-in-out var(--fx-delay, 0ms) forwards,
+    cfx-fade 0.8s ease-out calc(var(--fx-delay, 0ms) + 700ms) forwards;
+}
+.edge-fx.rev .flow-draw { stroke-dashoffset: -1; }
+@keyframes cfx-draw { to { stroke-dashoffset: 0; } }
+@keyframes cfx-fade { to { opacity: 0; } }
+/* The steady line and its particles appear only once the drawing reaches them. */
+.edge-fx:not(.light) .flow-glow,
+.edge-fx:not(.light) .flow-line { animation: cfx-appear 0.4s ease-out calc(var(--fx-delay, 0ms) + 500ms) both; }
+.edge-fx:not(.light) .flow-dots { animation: cfx-appear 0.6s ease-out calc(var(--fx-delay, 0ms) + 700ms) both; }
+@keyframes cfx-appear { from { opacity: 0; } }
+.edge-fx.light .flow-draw { stroke-width: 3; opacity: 0.8; }
+
+/* ---------- ambient life ---------- */
+/* Owned connections carry a steady stream of particles in the studio color. A soft halo
+   instead of a per-dot blur filter keeps it cheap when many connections are lit. */
+.city:not(.theme-ocean) .flow-dot { filter: none; stroke: var(--particle, #2dd4a0); stroke-opacity: 0.35; stroke-width: 4; paint-order: stroke; }
+
+/* ---------- reduced motion: same information, no movement ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .city .comp-node.cfx-build, .city .comp-node.cfx-visit { animation: none; }
+  .city-fx i, .cfx-flash { animation: none !important; opacity: 0; }
+  /* A still outline marks the component that was just bought or upgraded, for a few seconds. */
+  .city-fx-build .cfx-wave, .city-fx-upgrade .cfx-ring:not(.second) { opacity: 0.9; transform: scale(1.05, 1.14); }
+  .city .comp-node .burst { display: none; }
+  .flow-draw { display: none; }
+  .edge-fx .flow-glow, .edge-fx .flow-line, .edge-fx .flow-dots { animation: none !important; }
+  /* Fire and gold stay visible, without flickering. */
+  .city .comp-node.burning, .city .comp-node.owned.lvl3 { animation: none; }
+  .city .flames { animation: none; }
+}
