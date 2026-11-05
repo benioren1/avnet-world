@@ -20,12 +20,20 @@ const RECEIVED_COUNTS = ['active', 'resolved'];
 export function createDuels(ctx) {
   const { db, newId, nowLocal, today, getSettings, addEvent, wallet, wrap, fail, withLock, toNumber, photoOf } = ctx;
   const nowIso = () => new Date().toISOString();
-  // Creating and accepting bets run one at a time, so "one bet a day" can't be raced.
+  // Every change to a bet's status runs one at a time (create, accept, decline, withdraw,
+  // expire, resolve, cancel). Otherwise an accept could pass its "still pending?" check while
+  // a withdraw or the lock-time expiry refunds the bet, and a pot nobody paid would go active.
   const serial = (fn) => withLock('duels', fn);
 
+  // Bets close together with today's questions: at the earliest of the settings lock time and
+  // the lock time each question got when it was created (that one doesn't move if the
+  // setting changes later), so bets never stay open after the questions locked.
   async function lockPassed() {
     const { lockTime } = await getSettings();
-    return nowLocal().slice(11) >= lockTime;
+    const date = today();
+    const frozen = (await db.find('questions', { date })).map((q) => q.lockAt).filter(Boolean);
+    const cutoff = [`${date} ${lockTime}`, ...frozen].sort()[0];
+    return nowLocal() >= cutoff;
   }
 
   // Locked per player too, so a bet stake and a purchase can't both pass the same balance check.
@@ -51,7 +59,9 @@ export function createDuels(ctx) {
   };
 
   // Invitations nobody answered by the lock time expire, and the challenger gets the stake back.
-  async function expireStale() {
+  // expireStaleNow is for code already inside serial(); everyone else calls expireStale.
+  const expireStale = () => serial(expireStaleNow);
+  async function expireStaleNow() {
     const pending = await db.find('duels', { status: 'pending' });
     const passed = await lockPassed();
     for (const d of pending) {
@@ -146,7 +156,8 @@ export function createDuels(ctx) {
   }
 
   // When a player is deleted, their open duels are cancelled and everyone gets their stake back.
-  async function cleanupPlayer(playerId) {
+  const cleanupPlayer = (playerId) => serial(() => cleanupPlayerNow(playerId));
+  async function cleanupPlayerNow(playerId) {
     for (const d of await involving(playerId)) {
       if (d.status === 'resolved') continue;
       await refundStakes(d);
@@ -186,7 +197,7 @@ export function createDuels(ctx) {
     play.post('/duels', wrap((req, res) => serial(() => createDuel(req, res))));
 
     async function createDuel(req, res) {
-      await expireStale();
+      await expireStaleNow();
       if (await lockPassed()) throw fail(400, 'אחרי שעת הנעילה כבר אי אפשר לפתוח התערבות. נסה מחר בבוקר');
       const question = String(req.body.question || '').trim();
       const kind = req.body.kind || 'number';
@@ -218,7 +229,7 @@ export function createDuels(ctx) {
     async function acceptDuel(req, res) {
       const d = await db.findOne('duels', { id: req.params.id });
       if (!d || d.target !== req.player.id) throw fail(404, 'התערבות לא נמצאה');
-      await expireStale();
+      await expireStaleNow();
       const fresh = await db.findOne('duels', { id: d.id });
       if (fresh.status !== 'pending') throw fail(400, 'ההתערבות כבר לא מחכה לתשובה');
       if (await busyToday(req.player.id)) throw fail(400, 'כבר יש לך התערבות היום. אם שלחת אתגר שעוד לא התקבל, בטל אותו קודם');
@@ -236,21 +247,21 @@ export function createDuels(ctx) {
       res.json({ ok: true });
     }
 
-    play.post('/duels/:id/decline', wrap(async (req, res) => {
+    play.post('/duels/:id/decline', wrap((req, res) => serial(async () => {
       const d = await db.findOne('duels', { id: req.params.id });
       if (!d || d.target !== req.player.id || d.status !== 'pending') throw fail(404, 'התערבות ממתינה לא נמצאה');
       await refundStakes(d);
       await db.updateOne('duels', { id: d.id }, { status: 'declined', closedAt: nowIso() });
       res.json({ ok: true });
-    }));
+    })));
 
-    play.post('/duels/:id/withdraw', wrap(async (req, res) => {
+    play.post('/duels/:id/withdraw', wrap((req, res) => serial(async () => {
       const d = await db.findOne('duels', { id: req.params.id });
       if (!d || d.by !== req.player.id || d.status !== 'pending') throw fail(404, 'אפשר לבטל רק התערבות שעוד לא התקבלה');
       await refundStakes(d);
       await db.updateOne('duels', { id: d.id }, { status: 'cancelled', closedAt: nowIso() });
       res.json({ ok: true });
-    }));
+    })));
 
     // ===== admin =====
     admin.get('/duels', wrap(async (req, res) => {
@@ -266,7 +277,7 @@ export function createDuels(ctx) {
     }));
 
     // Safe to run again with a corrected answer: the previous result is removed first.
-    admin.post('/duels/:id/resolve', wrap(async (req, res) => {
+    admin.post('/duels/:id/resolve', wrap((req, res) => serial(async () => {
       const d = await db.findOne('duels', { id: req.params.id });
       if (!d || !['active', 'resolved'].includes(d.status)) throw fail(404, 'אפשר להכריע רק התערבות שהתקבלה');
       const answer = toNumber(req.body.answer);
@@ -292,16 +303,16 @@ export function createDuels(ctx) {
       }
       await db.updateOne('duels', { id: d.id }, { status: 'resolved', answer, winner, resolvedAt: nowIso() });
       res.json({ ok: true, winner, winnerName: winner ? names[winner]?.name : null });
-    }));
+    })));
 
-    admin.post('/duels/:id/cancel', wrap(async (req, res) => {
+    admin.post('/duels/:id/cancel', wrap((req, res) => serial(async () => {
       const d = await db.findOne('duels', { id: req.params.id });
       if (!d || d.status === 'cancelled') throw fail(404, 'התערבות לא נמצאה');
       await clearResult(d);
       await refundStakes(d);
       await db.updateOne('duels', { id: d.id }, { status: 'cancelled', closedAt: nowIso() });
       res.json({ ok: true });
-    }));
+    })));
   }
 
   return { register, record, records, winsThisMonth, forTv, cleanupPlayer, expireStale };

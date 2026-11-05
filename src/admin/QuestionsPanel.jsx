@@ -1,6 +1,7 @@
 import { CalendarDays } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adminApi } from '../api.js';
+import { useBusy } from '../useBusy.js';
 import Avatar from '../Avatar.jsx';
 import { COMPONENT_TYPES } from '../model.js';
 
@@ -153,12 +154,23 @@ export default function QuestionsPanel({ architecture, players, today }) {
 
   const flash = (m) => { setMsg(m); setTimeout(() => setMsg(''), 3000); };
 
+  // The day being shown right now: a slow answer for a day the admin already left is dropped,
+  // so day A's questions never appear (and get answered) under day B's heading.
+  const shownDate = useRef(date);
+  shownDate.current = date;
   const load = useCallback(async () => {
     const [q, d] = await Promise.all([adminApi.get(`/questions?date=${date}`), adminApi.get('/days')]);
+    if (shownDate.current !== date) return;
     setQuestions(q.questions);
     setDays(d);
-    setAnswers(Object.fromEntries(q.questions.map((x) => [x.id, x.answer ?? ''])));
+    // Answers the admin typed but hasn't published yet survive a reload (editing a question
+    // or adding one reloads the list); the server's value fills only the empty fields.
+    setAnswers((typed) => Object.fromEntries(q.questions.map((x) => {
+      const mine = typed[x.id];
+      return [x.id, mine !== undefined && String(mine).trim() !== '' ? mine : x.answer ?? ''];
+    })));
   }, [date]);
+  const [adding, guardAdd] = useBusy();
   useEffect(() => { load().catch((e) => flash(`❌ ${e.message}`)); }, [load]);
 
   // ok: a success message, or a function of the server's response that returns one.
@@ -181,7 +193,7 @@ export default function QuestionsPanel({ architecture, players, today }) {
     e.preventDefault();
     if (!draft.text.trim()) return;
     if (draft.text.includes('___')) return flash('❌ בחר רכיב, או השלם את החסר בטקסט');
-    run(adminApi.post('/questions', { ...draft, date }).then((res) => { setDraft((d) => ({ componentId: '', text: '', unit: '', kind: d.kind })); return res; }), lateNote);
+    guardAdd(() => run(adminApi.post('/questions', { ...draft, date }).then((res) => { setDraft((d) => ({ componentId: '', text: '', unit: '', kind: d.kind })); return res; }), lateNote));
   };
 
   const previousDay = days.find((d) => d.date < date);
@@ -280,7 +292,7 @@ export default function QuestionsPanel({ architecture, players, today }) {
                 {draft.kind === 'number' && (
                   <input className="unit" placeholder="יחידה" value={draft.unit} onChange={(e) => setDraft((d) => ({ ...d, unit: e.target.value }))} />
                 )}
-                <button className="primary" type="submit">+ הוסף</button>
+                <button className="primary" type="submit" disabled={adding}>+ הוסף</button>
               </div>
             </form>
           )}

@@ -27,11 +27,12 @@ export default function SettingsPanel({ settings, store, onChange }) {
 
   const toggleDay = (d) => setS({ ...s, workDays: s.workDays.includes(d) ? s.workDays.filter((x) => x !== d) : [...s.workDays, d].sort() });
 
-  const payNow = () => adminApi.post('/payout')
+  // Once a day: paying now means tonight's automatic payout won't run (and things bought later today earn nothing today).
+  const payNow = () => window.confirm('לחלק עכשיו את ההכנסה של היום? החלוקה האוטומטית של הערב לא תרוץ, ומה שיקנו מעכשיו ועד הערב לא יכניס היום.') && adminApi.post('/payout')
     .then((r) => flash('ok', r.already ? 'ההכנסה של היום כבר חולקה' : `💸 חולקו ${r.total.toLocaleString()} דינרים`))
     .catch((e) => flash('error', e.message));
   const closeVote = () => window.confirm('לסגור את ההצבעה של השבוע ולהכריז על המנצח?') && adminApi.post('/vote/close')
-    .then((r) => flash('ok', r.already ? 'ההצבעה של השבוע כבר נסגרה' : r.winner ? `🏆 ${r.winner} זכה עם ${r.count} קולות` : 'לא היו קולות השבוע'))
+    .then((r) => flash('ok', r.already ? 'ההצבעה של השבוע כבר נסגרה' : r.winner ? (r.tie ? `🏆 תיקו! ${r.winner} עם ${r.count} קולות כל אחד` : `🏆 ${r.winner} זכה עם ${r.count} קולות`) : 'לא היו קולות השבוע'))
     .catch((e) => flash('error', e.message));
 
   return (

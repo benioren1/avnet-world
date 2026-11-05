@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Building2, Lock, Palette, ShieldCheck, ShoppingBag, Sun, Swords, Trophy } from 'lucide-react';
 import { playerApi, readToken } from '../api.js';
 import Avatar from '../Avatar.jsx';
@@ -27,7 +27,7 @@ export default function PlayerApp() {
   const [architecture, setArchitecture] = useState(null);
   const [board, setBoard] = useState(null);
   const [duels, setDuels] = useState(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(null); // { status, message }
   const [tab, setTab] = useState('today');
   const [visiting, setVisiting] = useState(null); // city of another player
   const [placing, setPlacing] = useState(null); // decoration type waiting for a click on the map
@@ -35,7 +35,12 @@ export default function PlayerApp() {
   const [tick, setTick] = useState(0); // bumps child panels to reload on auto-refresh
   const [toast, setToast] = useState('');
 
-  const notify = useCallback((m) => { setToast(m); setTimeout(() => setToast(''), 3500); }, []);
+  const toastTimer = useRef(null);
+  const notify = useCallback((m) => {
+    setToast(m);
+    clearTimeout(toastTimer.current); // a second toast gets its full time on screen
+    toastTimer.current = setTimeout(() => setToast(''), 3500);
+  }, []);
 
   const refresh = useCallback(async () => {
     const [m, a, b, du] = await Promise.all([
@@ -46,18 +51,25 @@ export default function PlayerApp() {
     setBoard(b);
     setDuels(du);
     setTick((t) => t + 1);
+    setError(null);
   }, []);
 
-  useEffect(() => { refresh().catch((e) => setError(e.message)); }, [refresh]);
+  // Only a rejected link (401: deleted or deactivated player) means "you need a personal link".
+  // Anything else (server restarting, network blink) shows a retry and keeps polling.
+  const onLoadError = useCallback((e) => setError({ status: e.status, message: e.message }), []);
+  useEffect(() => { refresh().catch(onLoadError); }, [refresh, onLoadError]);
 
   // Tabs stay open all day: refresh every minute and whenever the player comes back to the tab,
   // so locks, published results, new questions and incidents show up on their own.
   useEffect(() => {
-    const again = () => { if (document.visibilityState === 'visible') refresh().catch(() => {}); };
+    const again = () => {
+      if (document.visibilityState !== 'visible') return;
+      refresh().catch((e) => { if (e.status === 401 || !me) onLoadError(e); }); // with data on screen, a blip keeps it
+    };
     const timer = setInterval(again, REFRESH_MS);
     document.addEventListener('visibilitychange', again);
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', again); };
-  }, [refresh]);
+  }, [refresh, onLoadError, me]);
 
   const myCity = useMemo(() => me && ({
     player: me.player,
@@ -133,12 +145,21 @@ export default function PlayerApp() {
 
   const moveDecoration = (id, x, y) => playerApi.patch(`/decorations/${id}`, { x, y }).catch((e) => notify(`❌ ${e.message}`));
 
-  if (error) {
+  if (error?.status === 401 || (error && !readToken('player'))) {
     return (
       <div className="center-page">
         <div className="logo big-logo"><Lock size={26} /></div>
         <h1>צריך קישור אישי</h1>
         <p className="muted">כדי לשחק צריך להיכנס דרך הקישור האישי שקיבלת מראש הצוות.</p>
+      </div>
+    );
+  }
+  if (error && !me) {
+    return (
+      <div className="center-page">
+        <h1>אין חיבור לשרת כרגע</h1>
+        <p className="muted">כנראה השרת מתעדכן. המסך ינסה שוב לבד, או לחץ:</p>
+        <button className="primary" onClick={() => refresh().catch(onLoadError)}>נסה שוב</button>
       </div>
     );
   }

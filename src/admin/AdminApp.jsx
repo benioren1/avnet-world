@@ -9,6 +9,7 @@ import { Building2, Gamepad2, Gift, LogOut, Network, Settings, ShieldCheck, Sire
 import BonusPanel from './BonusPanel.jsx';
 import IncidentsPanel from './IncidentsPanel.jsx';
 import TvPanel from './TvPanel.jsx';
+import { useBusy } from '../useBusy.js';
 
 const SECTIONS = [
   ['questions', 'שאלות ותשובות', Sun],
@@ -59,10 +60,11 @@ function JoinGameDialog({ players, onClose }) {
     window.location.hash = '#/play';
   };
 
+  const [creating, guardCreate] = useBusy();
   const create = (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    adminApi.post('/players', { name: name.trim() }).then(play).catch((err) => setError(err.message));
+    guardCreate(() => adminApi.post('/players', { name: name.trim() }).then(play).catch((err) => setError(err.message)));
   };
 
   const active = players.filter((p) => p.active !== false);
@@ -86,7 +88,7 @@ function JoinGameDialog({ players, onClose }) {
         )}
         <form className="row" onSubmit={create}>
           <input autoFocus placeholder="השם שלך" value={name} onChange={(e) => setName(e.target.value)} />
-          <button className="primary" type="submit">צור ושחק</button>
+          <button className="primary" type="submit" disabled={creating}>צור ושחק</button>
         </form>
         {error && <p className="login-error">{error}</p>}
         <button className="ghost" onClick={onClose}>ביטול</button>
@@ -102,13 +104,23 @@ export default function AdminApp() {
   const [section, setSection] = useState('questions');
   const [joining, setJoining] = useState(false);
 
+  // Only a rejected code logs the admin out. A server restart or a network blink just shows
+  // a message and keeps the saved code (the admin may not even know it, having come by link).
+  const [loadError, setLoadError] = useState('');
   const load = useCallback(() => {
     adminApi.get('/state')
-      .then((s) => { setState(s); setNeedLogin(false); setLoginError(''); })
+      .then((s) => { setState(s); setNeedLogin(false); setLoginError(''); setLoadError(''); })
       .catch((e) => {
-        clearToken('admin');
-        setNeedLogin(true);
-        setLoginError(e.status === 429 ? e.message : 'הקוד השמור כבר לא תקף, היכנס מחדש');
+        if (e.status === 401) {
+          clearToken('admin');
+          setNeedLogin(true);
+          setLoginError('הקוד השמור כבר לא תקף, היכנס מחדש');
+        } else if (e.status === 429) {
+          setNeedLogin(true);
+          setLoginError(e.message);
+        } else {
+          setLoadError('אין חיבור לשרת כרגע. נסה שוב בעוד רגע');
+        }
       });
   }, []);
   useEffect(() => { if (readToken('admin')) load(); }, [load]);
@@ -133,7 +145,14 @@ export default function AdminApp() {
   }, []);
 
   if (needLogin) return <AdminLogin onLogin={login} error={loginError} />;
-  if (!state) return <div className="center-page muted">טוען...</div>;
+  if (!state) {
+    return loadError ? (
+      <div className="center-page">
+        <p className="muted">{loadError}</p>
+        <button className="primary" onClick={load}>נסה שוב</button>
+      </div>
+    ) : <div className="center-page muted">טוען...</div>;
+  }
 
   return (
     <div className="app">

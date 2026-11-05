@@ -27,7 +27,7 @@ function Announcements() {
       .catch((err) => setError(err.message));
   };
   const toggle = (a) => adminApi.patch(`/announcements/${a.id}`, { featured: !a.featured }).then(load);
-  const remove = (a) => adminApi.del(`/announcements/${a.id}`).then(load);
+  const remove = (a) => window.confirm('למחוק את ההודעה?') && adminApi.del(`/announcements/${a.id}`).then(load).catch((e) => setError(e.message));
 
   const active = list.filter((a) => a.active);
   const expired = list.filter((a) => !a.active).slice(0, 5);
@@ -114,7 +114,7 @@ function Facts() {
       .then(() => { setText(''); setError(''); load(); })
       .catch((err) => setError(err.message));
   };
-  const remove = (f) => adminApi.del(`/facts/${f.id}`).then(load);
+  const remove = (f) => window.confirm('למחוק את העובדה?') && adminApi.del(`/facts/${f.id}`).then(load).catch((e) => setError(e.message));
 
   return (
     <div className="card">

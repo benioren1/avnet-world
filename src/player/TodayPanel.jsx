@@ -144,7 +144,12 @@ export default function TodayPanel({ architecture, meId, onChange, notify, refre
   const [data, setData] = useState(null);
   const nodeName = (id) => architecture.nodes.find((n) => n.id === id)?.data.name;
 
-  const load = useCallback(() => playerApi.get('/today').then(setData), []);
+  const [loadError, setLoadError] = useState('');
+  // A failed load shows a retry instead of "loading..." forever; with data already on screen
+  // the old data stays and the next auto-refresh tries again.
+  const load = useCallback(() => playerApi.get('/today')
+    .then((d) => { setData(d); setLoadError(''); })
+    .catch((e) => setLoadError(e.message)), []);
   useEffect(() => { load(); }, [load, refreshKey]);
 
   // On any error (e.g. the question just locked) reload, so the form doesn't stay on screen.
@@ -153,7 +158,14 @@ export default function TodayPanel({ architecture, meId, onChange, notify, refre
     .catch((e) => notify(`❌ ${e.message}`))
     .finally(load);
 
-  if (!data) return <div className="muted pad">טוען...</div>;
+  if (!data) {
+    return loadError ? (
+      <div className="pad">
+        <p className="muted">לא הצלחנו לטעון את השאלות של היום ({loadError}).</p>
+        <button className="primary" onClick={load}>נסה שוב</button>
+      </div>
+    ) : <div className="muted pad">טוען...</div>;
+  }
 
   const myTotal = data.questions.reduce((s, q) => s + (q.myGuess?.points ?? 0) + (q.myGuess?.bonus ?? 0), 0) + (data.dayBonus || 0);
   const anyResolved = data.questions.some((q) => q.resolved);

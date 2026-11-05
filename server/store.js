@@ -7,6 +7,9 @@
 //   insertOne(coll, doc)          -> doc      doc.id must be unique within the collection
 //   updateOne(coll, filter, set, { upsert })
 //   deleteMany(coll, filter)
+//   recent(coll, n)               -> the n newest docs by `at` (feed, TV) without reading them all
+//   ping()                        -> throws if the database can't be reached (health check)
+//   close()                       -> flush / disconnect on shutdown
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,23 +40,30 @@ function createFileStore(file) {
 
   // Writes are coalesced into one at the end of the current tick (many updates in one
   // request = one write), and flushed on shutdown, so a restart never loses the last change.
+  // "dirty" is cleared only after the file was really written: if the write fails (a sync
+  // tool or antivirus holding the file), the change stays pending and is retried.
   let dirty = false;
+  let scheduled = false;
   const flush = () => {
+    scheduled = false;
     if (!dirty) return;
-    dirty = false;
     const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data));
-    fs.renameSync(tmp, file);
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(data));
+      fs.renameSync(tmp, file);
+      dirty = false;
+    } catch (e) {
+      console.error(`Could not save ${file}, retrying in 2s:`, e.message);
+      if (!scheduled) { scheduled = true; setTimeout(flush, 2000); }
+    }
   };
   const persist = () => {
-    if (dirty) return;
     dirty = true;
+    if (scheduled) return;
+    scheduled = true;
     setImmediate(flush);
   };
-  process.on('exit', flush);
-  for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) {
-    process.on(sig, () => { flush(); process.exit(0); });
-  }
+  process.on('exit', flush); // last chance; the server's shutdown handler calls close() first
   const clone = (d) => structuredClone(d);
 
   return {
@@ -76,6 +86,11 @@ function createFileStore(file) {
       data[coll] = data[coll].filter((d) => !matches(d, filter));
       persist();
     },
+    async recent(coll, n) {
+      return [...data[coll]].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, n).map(clone);
+    },
+    async ping() {},
+    async close() { flush(); },
   };
 }
 
@@ -118,9 +133,14 @@ async function createMongoStore(url, dbName) {
       return doc;
     },
     async updateOne(coll, filter, set, { upsert = false } = {}) {
+      // Mongo rejects an empty $set (the file store accepts it); nothing to change anyway.
+      if (!set || !Object.keys(set).length) return;
       await db.collection(coll).updateOne(filter, { $set: set }, { upsert });
     },
     async deleteMany(coll, filter) { await db.collection(coll).deleteMany(filter); },
+    recent: (coll, n) => db.collection(coll).find({}, opts).sort({ at: -1 }).limit(n).toArray(),
+    async ping() { await db.command({ ping: 1 }); },
+    async close() { await client.close(); },
   };
 }
 

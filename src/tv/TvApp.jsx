@@ -105,7 +105,7 @@ function Delta({ value }) {
 
 function BoardSlide({ board, delta }) {
   const top = board.rows.slice(0, 3);
-  const rest = board.rows.slice(3, 10);
+  const rest = board.rows.slice(3, 15); // a team of 13 all fit
   const max = Math.max(1, ...board.rows.map((r) => r.value));
   if (!board.rows.length) return <div className="tv-slide tv-empty">עוד אין שחקנים</div>;
   return (
@@ -370,11 +370,13 @@ function MomentOverlay({ moment }) {
 // Compares each new state to the previous one and queues moments for what changed.
 function detectMoments(prev, next) {
   const moments = [];
-  const seen = new Set(prev.feed.map((e) => e.id));
+  // "New" means newer than anything already seen. (Not just "an id we didn't have": when
+  // events are deleted, older ones slide into the list and must not replay as news.)
+  const seenUntil = prev.feed.reduce((max, e) => (e.at > max ? e.at : max), '');
   // Several events of the same kind by the same player (a shopping spree) become one moment.
   const groups = new Map();
   [...next.feed].reverse().forEach((e) => {
-    if (seen.has(e.id) || e.type === 'income' || e.type === 'refund') return;
+    if (e.at <= seenUntil || e.type === 'income' || e.type === 'refund') return;
     const key = `${e.type}:${e.playerId || e.id}`;
     groups.set(key, [...(groups.get(key) || []), e]);
   });
@@ -382,17 +384,20 @@ function detectMoments(prev, next) {
     const e = list[list.length - 1];
     const style = MOMENT_STYLE[e.type] || { title: 'עדכון!', tone: 'cyan', sound: 'chime' };
     moments.push({
-      key: e.id, crown: e.type === 'results' || e.type === 'vote', ...style,
+      key: e.id, crown: e.type === 'results' || e.type === 'vote', date: e.date, ...style,
       text: list.length > 1 ? `${e.text} (ועוד ${list.length - 1} כאלה! 🤯)` : e.text,
       player: e.name ? { name: e.name, photo: e.photo } : null,
     });
   });
 
-  // Overtakes among players who already built something: who passed whom.
+  // Overtakes: only a real pass (this player's city grew and is now worth more than the
+  // other's). Tie-break flips and others dropping (refunds) are not news.
   const oldRank = Object.fromEntries(prev.board.rows.map((r, i) => [r.id, i]));
+  const oldValue = Object.fromEntries(prev.board.rows.map((r) => [r.id, r.value]));
   next.board.rows.slice(0, 8).forEach((r, i) => {
-    if (r.value <= 0 || oldRank[r.id] === undefined || oldRank[r.id] <= i) return;
-    const passed = next.board.rows.slice(i + 1).find((o) => oldRank[o.id] !== undefined && oldRank[o.id] < oldRank[r.id]);
+    if (r.value <= 0 || oldRank[r.id] === undefined || oldRank[r.id] <= i || r.value <= oldValue[r.id]) return;
+    const passed = next.board.rows.slice(i + 1)
+      .find((o) => oldRank[o.id] !== undefined && oldRank[o.id] < oldRank[r.id] && r.value > o.value);
     if (!passed) return;
     moments.push({
       key: `over-${r.id}-${i}-${next.board.rows.length}`, title: i === 0 ? '👑 יש מוביל חדש!' : 'עקיפה!', tone: 'gold', sound: 'fanfare',
@@ -402,6 +407,31 @@ function detectMoments(prev, next) {
   });
 
   return moments;
+}
+
+// Keeps the queue short without dropping the moment on screen (index 0) or the moment that
+// opens the results ceremony; the oldest ordinary moments go first.
+function trimQueue(queue) {
+  if (queue.length <= MAX_QUEUED_MOMENTS) return queue;
+  const keep = new Set([queue[0], ...queue.filter((m) => m.opens)]);
+  const rest = queue.filter((m) => !keep.has(m)).slice(-(MAX_QUEUED_MOMENTS - keep.size));
+  return queue.filter((m) => keep.has(m) || rest.includes(m));
+}
+
+// Clock and lock chip tick every second on their own, so the whole show (and the city map)
+// doesn't redraw every second on the TV's browser.
+function TvClock() {
+  const now = useNow(1000);
+  return <span className="tv-clock">{new Date(now).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</span>;
+}
+function LockChip({ deadline }) {
+  const now = useNow(1000);
+  if (!deadline || deadline <= now) return null;
+  return (
+    <span className={`tv-lock-chip${deadline - now < 5 * 60 * 1000 ? ' urgent' : ''}`}>
+      <Timer size={20} /> נועל בעוד {fmtCountdown(deadline - now)}
+    </span>
+  );
 }
 
 // ---------- the show ----------
@@ -443,37 +473,35 @@ function TvShow() {
   const [only] = useState(() => new URLSearchParams(window.location.hash.split('?')[1] || '').get('only'));
   const deadlineRef = useRef(null);
   const prevRef = useRef(null);
+  const loading = useRef(false);
+  const openedReveal = useRef(new Set()); // results dates whose ceremony already ran
   const sound = useSound();
-  const now = useNow(1000);
+  const now = useNow(60 * 1000); // only for the day/night background
 
-  const load = useCallback(() => tvApi.get('/state').then((s) => {
-    deadlineRef.current = s.countdown?.lockInMs != null ? Date.now() + s.countdown.lockInMs : null;
-    if (prevRef.current) {
-      const found = detectMoments(prevRef.current, s);
-      if (found.length) setMoments((q) => [...q, ...found].slice(-MAX_QUEUED_MOMENTS));
-    }
-    prevRef.current = s;
-    setState(s);
-    setError(null);
-  }).catch((e) => setError({ status: e.status, message: e.message })), []);
+  // One request at a time (a slow server must not get a pile of them, or answers arriving
+  // out of order), and a request that hangs is given up after 15s.
+  const load = useCallback(() => {
+    if (loading.current) return;
+    loading.current = true;
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000));
+    Promise.race([tvApi.get('/state'), timeout]).then((s) => {
+      deadlineRef.current = s.countdown?.lockInMs != null ? Date.now() + s.countdown.lockInMs : null;
+      if (prevRef.current) {
+        const found = detectMoments(prevRef.current, s);
+        if (found.length) setMoments((q) => trimQueue([...q, ...found]));
+      }
+      prevRef.current = s;
+      setState(s);
+      setError(null);
+    }).catch((e) => setError({ status: e.status, message: e.message }))
+      .finally(() => { loading.current = false; });
+  }, []);
 
   useEffect(() => {
     load();
     const t = setInterval(load, POLL_MS);
     return () => clearInterval(t);
   }, [load]);
-
-  // Play each moment for a few seconds; a "results" moment then opens the ceremony.
-  const moment = moments[0];
-  useEffect(() => {
-    if (!moment) return undefined;
-    sound.play(moment.sound);
-    const t = setTimeout(() => {
-      setMoments((q) => q.slice(1));
-      if (moment.opens) setForced(moment.opens);
-    }, MOMENT_MS);
-    return () => clearTimeout(t);
-  }, [moment]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const slides = useMemo(() => {
     if (!state) return [];
@@ -500,8 +528,25 @@ function TvShow() {
   const current = only || forced || slides[index % Math.max(1, slides.length)];
   const turn = Math.floor(index / Math.max(1, slides.length));
 
-  const resolvedCount = state ? state.questions.filter((q) => q.resolved).length : 0;
-  const slideMs = current === 'reveal' ? ceremonyLength(resolvedCount) : SLIDE_MS;
+  const revealQuestions = state?.reveal?.questions || [];
+  const slideMs = current === 'reveal' ? ceremonyLength(revealQuestions.length) : SLIDE_MS;
+
+  // Play each moment for a few seconds; a "results" moment then opens the ceremony, once per
+  // published day and only if there is something to show. Moments wait while the ceremony runs.
+  const moment = current === 'reveal' ? null : moments[0];
+  useEffect(() => {
+    if (!moment) return undefined;
+    sound.play(moment.sound);
+    const t = setTimeout(() => {
+      setMoments((q) => q.slice(1));
+      const day = moment.date || state?.reveal?.date;
+      if (moment.opens && revealQuestions.length && !openedReveal.current.has(day)) {
+        openedReveal.current.add(day);
+        setForced(moment.opens);
+      }
+    }, MOMENT_MS);
+    return () => clearTimeout(t);
+  }, [moment]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!state) return undefined;
     const t = setTimeout(() => {
@@ -539,7 +584,7 @@ function TvShow() {
     ...state.feed.map((e) => ({ id: e.id, text: e.text })),
   ];
   const deadline = deadlineRef.current;
-  const counting = state.countdown && deadline && deadline > now;
+  const counting = state.countdown && deadline && deadline > Date.now();
 
   return (
     <div className={`tv tv-show daypart-${partOfDay(new Date(now).getHours())}${state.incidents.length ? ' alarm' : ''}`}>
@@ -557,16 +602,13 @@ function TvShow() {
               {state.mining.firstMiner && <> · כורה ראשון: <b>{state.mining.firstMiner.name}</b></>}
             </span>
           )}
-          {counting && (
-            <span className={`tv-lock-chip${deadline - now < 5 * 60 * 1000 ? ' urgent' : ''}`}>
-              <Timer size={20} /> נועל בעוד {fmtCountdown(deadline - now)}
-            </span>
-          )}
+          {state.countdown && <LockChip deadline={deadline} />}
         </div>
-        <button className="tv-sound" onClick={sound.toggle} title={sound.on ? 'השתק' : 'הפעל צלילים'}>
-          {sound.on ? <Volume2 size={22} /> : <VolumeX size={22} />}
+        <button className={`tv-sound${sound.blocked ? ' blocked' : ''}`} onClick={sound.toggle} title={sound.blocked ? 'הדפדפן חוסם צלילים: לחץ כאן פעם אחת' : sound.on ? 'השתק' : 'הפעל צלילים'}>
+          {sound.on && !sound.blocked ? <Volume2 size={22} /> : <VolumeX size={22} />}
+          {sound.blocked && <span className="tv-sound-hint">לחץ להפעלת צלילים</span>}
         </button>
-        <span className="tv-clock">{new Date(now).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</span>
+        <TvClock />
       </header>
 
       <main className="tv-main" key={`${current}-${index}-${forced || ''}`}>
@@ -575,7 +617,7 @@ function TvShow() {
         {current === 'today' && <TodaySlide state={state} />}
         {current === 'countdown' && counting && <CountdownSlide countdown={state.countdown} deadline={deadline} />}
         {current === 'countdown' && !counting && <TodaySlide state={state} />}
-        {current === 'reveal' && <Ceremony questions={state.questions} sound={sound} />}
+        {current === 'reveal' && <Ceremony questions={revealQuestions} sound={sound} />}
         {current === 'duels' && <DuelsSlide duels={state.duels} />}
         {current === 'fact' && state.facts.length > 0 && <FactSlide fact={state.facts[occurrence('fact') % state.facts.length]} />}
         {current === 'records' && <RecordsSlide records={state.records} />}

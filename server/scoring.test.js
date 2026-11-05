@@ -76,3 +76,19 @@ test('perfect day requires every question within 10%', () => {
   const q2 = [{ playerId: 'a', error: 0.1 }, { playerId: 'b', error: 0.3 }];
   assert.deepEqual(perfectDayPlayers([q1, q2]), ['a']);
 });
+
+test('answers below 1 are scored relative to the answer (an error rate of 0.05)', () => {
+  assert.equal(relativeError(0.1, 0.05), 1); // 100% off, not "0.05 off"
+  assert.equal(pointsForError(relativeError(0.1, 0.05)), 0);
+  assert.equal(pointsForError(relativeError(0.05, 0.05)), 100);
+  assert.equal(relativeError(0, 0), 0);
+});
+
+test('no closest or beat-the-crowd bonus for a guess that earned nothing', () => {
+  const scored = scoreQuestion([{ playerId: 'a', value: 1000 }, { playerId: 'b', value: 5000 }], 10);
+  for (const s of scored) {
+    assert.equal(s.points, 0);
+    assert.equal(s.bonus, 0);
+    assert.equal(s.closest, false);
+  }
+});

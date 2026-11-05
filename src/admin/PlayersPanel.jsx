@@ -1,6 +1,7 @@
 import { Users } from 'lucide-react';
 import { useState } from 'react';
 import { adminApi, readToken, resizePhoto, storeToken } from '../api.js';
+import { useBusy } from '../useBusy.js';
 import Avatar from '../Avatar.jsx';
 
 const playerLink = (token) => `${window.location.origin}${window.location.pathname}#/play?t=${token}`;
@@ -31,10 +32,11 @@ export default function PlayersPanel({ players, onChange }) {
   const flash = (m) => { setMsg(m); setTimeout(() => setMsg(''), 2500); };
   const run = (p) => p.then(onChange).catch((e) => flash(`❌ ${e.message}`));
 
+  const [adding, guardAdd] = useBusy();
   const add = (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    run(adminApi.post('/players', { name, photo }).then(() => { setName(''); setPhoto(''); }));
+    guardAdd(() => run(adminApi.post('/players', { name, photo }).then(() => { setName(''); setPhoto(''); })));
   };
 
   const copyLink = async (p) => {
@@ -59,7 +61,7 @@ export default function PlayersPanel({ players, onChange }) {
           <Avatar name={name || '+'} photo={photo} size={48} />
         </PhotoPicker>
         <input placeholder="שם השחקן" value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="primary" type="submit">+ הוסף שחקן</button>
+        <button className="primary" type="submit" disabled={adding}>+ הוסף שחקן</button>
       </form>
 
       <div className="player-list">

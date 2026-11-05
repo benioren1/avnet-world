@@ -3,6 +3,7 @@ import { Check, Palette, PartyPopper, Sparkles, Tag, Trees, Tv } from 'lucide-re
 import { playerApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 import { Coin } from '../icons.jsx';
+import { useBusy } from '../useBusy.js';
 
 const STATUS = { pending: '⏳ ממתין לאישור', approved: '✅ מוצג היום בטלוויזיה', rejected: '↩️ נדחה, הכסף הוחזר' };
 
@@ -45,6 +46,8 @@ export default function Studio({ me, onChange, notify, onPlace }) {
   useEffect(() => { loadBillboards(); }, [loadBillboards]);
   useEffect(() => setNames({ cityName: profile.cityName, motto: profile.motto }), [profile.cityName, profile.motto]);
 
+  // Paid actions run one at a time, so a second tap on a slow network can't pay twice.
+  const [busy, guard] = useBusy();
   const act = async (promise, ok) => {
     try {
       await promise;
@@ -57,7 +60,7 @@ export default function Studio({ me, onChange, notify, onPlace }) {
 
   const buy = (key, item) => {
     if (!window.confirm(`לקנות "${item.label}" ב-${item.price.toLocaleString()} דינרים? תישאר עם ${(balance - item.price).toLocaleString()}`)) return;
-    act(playerApi.post('/cosmetics/buy', { key }), `✨ "${item.label}" שלך!`);
+    guard(() => act(playerApi.post('/cosmetics/buy', { key }), `✨ "${item.label}" שלך!`));
   };
   const equip = (group, id) => act(playerApi.post('/profile', { [group]: id }));
 
@@ -65,7 +68,7 @@ export default function Studio({ me, onChange, notify, onPlace }) {
     e.preventDefault();
     if (!billboard.trim()) return;
     if (!window.confirm(`לשלוח את השלט לאישור ב-${catalog.billboardPrice} דינרים? אם הוא לא יאושר, הכסף יחזור אליך.`)) return;
-    act(playerApi.post('/billboards', { text: billboard }).then(() => { setBillboard(''); loadBillboards(); }), '📺 השלט נשלח לאישור');
+    guard(() => act(playerApi.post('/billboards', { text: billboard }).then(() => { setBillboard(''); loadBillboards(); }), '📺 השלט נשלח לאישור'));
   };
 
   return (
@@ -155,7 +158,7 @@ export default function Studio({ me, onChange, notify, onPlace }) {
             onChange={(e) => setBillboard(e.target.value)}
           />
           <span className="muted small">{billboard.length}/{catalog.billboardMaxChars}</span>
-          <button className="primary" type="submit" disabled={!billboard.trim() || balance < catalog.billboardPrice}>
+          <button className="primary" type="submit" disabled={busy || !billboard.trim() || balance < catalog.billboardPrice}>
             שלח ב-<Coin value={catalog.billboardPrice} size={12} />
           </button>
         </form>

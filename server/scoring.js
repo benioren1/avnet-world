@@ -7,8 +7,11 @@ export const PERFECT_DAY_ERROR = 0.1;
 
 // Relative error. When the real answer is 0 we divide by 1,
 // so the error becomes the absolute distance.
+// (Dividing by at least 1 would make every answer below 1, like an error rate of 0.05,
+// almost impossible to miss, so only an exact 0 falls back to absolute distance.)
 export function relativeError(guess, actual) {
-  return Math.abs(guess - actual) / Math.max(Math.abs(actual), 1);
+  if (actual === 0) return Math.abs(guess);
+  return Math.abs(guess - actual) / Math.abs(actual);
 }
 
 // Points by error, linear between these anchor points.
@@ -45,10 +48,13 @@ export function scoreQuestion(guesses, actual) {
 
   return guesses.map((g, i) => {
     const error = errors[i];
-    const closest = error === best;
-    const beatCrowd = guesses.length > 1 && error < crowdError;
+    const points = pointsForError(error);
+    // The bonuses reward a good forecast, so a guess that earned nothing gets none either
+    // (otherwise the "least wrong" of several wild guesses would still be paid).
+    const closest = points > 0 && error === best;
+    const beatCrowd = points > 0 && guesses.length > 1 && error < crowdError;
     const bonus = (closest ? CLOSEST_BONUS : 0) + (beatCrowd ? BEAT_CROWD_BONUS : 0);
-    return { playerId: g.playerId, error, points: pointsForError(error), bonus, closest, beatCrowd };
+    return { playerId: g.playerId, error, points, bonus, closest, beatCrowd };
   });
 }
 

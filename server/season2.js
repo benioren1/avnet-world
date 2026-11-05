@@ -21,11 +21,12 @@ const ANNOUNCEMENT_MAX_CHARS = 120;
 const DUEL_KING_MIN_WINS = 3;
 const FACT_MAX_CHARS = 140;
 const STATS_TTL_MS = 5 * 60 * 1000;
+const CATCH_UP_DAYS = 7; // missed evenings (server down at payout time) are paid up to a week back
 
 export function createSeason2(ctx) {
   const {
     db, newId, newToken, nowLocal, today, getMeta, setMeta, getSettings, getArchitecture,
-    addEvent, wallet, wrap, fail, publicPlayer, leaderboard, duels, withLock, photoOf,
+    addEvent, wallet, wrap, fail, publicPlayer, leaderboard, duels, withLock, photoOf, createCodeGuard,
   } = ctx;
 
   const nowIso = () => new Date().toISOString();
@@ -197,7 +198,8 @@ export function createSeason2(ctx) {
     const mineDates = new Set(bonuses.filter((b) => b.kind === 'mine').map((b) => b.date));
     const streak = streakBefore(today(), mineDates, settings.workDays) + (mineDates.has(today()) ? 1 : 0);
     if (streak >= MINER_TITLE_STREAK) titles.push({ id: 'miner', label: '⛏️ כורה מתמיד' });
-    if (beautyWinner?.playerId === player.id && today() < addDays(beautyWinner.date, 7)) titles.push({ id: 'beauty', label: '🏆 העיר היפה' });
+    const beautyIds = beautyWinner?.playerIds || (beautyWinner?.playerId ? [beautyWinner.playerId] : []);
+    if (beautyIds.includes(player.id) && today() < addDays(beautyWinner.date, 7)) titles.push({ id: 'beauty', label: '🏆 העיר היפה' });
     // Duel king: most bet wins this month (at least 3).
     if (topWins >= DUEL_KING_MIN_WINS && wins[player.id] === topWins) titles.push({ id: 'duelking', label: '🗡️ מלך ההתערבויות' });
     return titles;
@@ -213,28 +215,38 @@ export function createSeason2(ctx) {
     return { open: weekday(date) === s.voteDay && !closed, week, myVote: mine?.target || null };
   }
 
-  async function closeVote(week) {
+  // Closes one week's vote: the most-voted active city wins the bonus. A tie is announced
+  // as a tie and every tied city gets the bonus. Runs under a lock so it can't run twice at once.
+  const closeVote = (week) => withLock('vote', () => closeVoteNow(week));
+  async function closeVoteNow(week) {
     const closedWeeks = await getMeta('votesClosed', []);
     if (closedWeeks.includes(week)) return { already: true };
-    const votes = await db.find('votes', { week });
+    const players = Object.fromEntries((await db.find('players')).filter((p) => p.active !== false).map((p) => [p.id, p]));
+    const votes = (await db.find('votes', { week })).filter((v) => players[v.target]);
     await setMeta('votesClosed', [...closedWeeks.slice(-52), week]);
     if (!votes.length) return { winner: null };
     const tally = {};
-    votes.sort((a, b) => a.at.localeCompare(b.at)).forEach((v) => { tally[v.target] = (tally[v.target] || 0) + 1; });
-    const [winnerId, count] = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
-    const winner = await db.findOne('players', { id: winnerId });
+    votes.forEach((v) => { tally[v.target] = (tally[v.target] || 0) + 1; });
+    const count = Math.max(...Object.values(tally));
+    const winnerIds = Object.keys(tally).filter((id) => tally[id] === count);
+    const names = winnerIds.map((id) => players[id].name);
     const { voteBonus } = await getSettings();
-    await db.insertOne('bonuses', { id: `${week}:vote`, date: today(), at: nowIso(), playerId: winnerId, kind: 'vote', points: voteBonus });
-    await setMeta('beautyWinner', { playerId: winnerId, week, date: today() });
-    await addEvent('vote', `🏆 העיר היפה של השבוע: ${winner?.name} עם ${count} קולות! +${voteBonus} דינרים`, winnerId);
-    return { winner: winner?.name, count };
+    for (const id of winnerIds) {
+      await db.insertOne('bonuses', { id: `${week}:vote:${id}`, date: today(), at: nowIso(), playerId: id, kind: 'vote', points: voteBonus });
+    }
+    await setMeta('beautyWinner', { playerIds: winnerIds, week, date: today() });
+    await addEvent('vote', winnerIds.length > 1
+      ? `🏆 תיקו בהצבעה על העיר היפה של השבוע! ${names.join(' ו')} עם ${count} קולות כל אחד/ת. +${voteBonus} דינרים לכל אחד/ת`
+      : `🏆 העיר היפה של השבוע: ${names[0]} עם ${count} קולות! +${voteBonus} דינרים`, winnerIds[0]);
+    return { winner: names.join(', '), count, tie: winnerIds.length > 1 };
   }
 
   // ---------- passive income ----------
   // Pays every active player 2% (configurable) of what they paid for each component they own,
   // multiplied by the component's level. Burning components (open incident) pay nothing.
   // Idempotent per date, so the background job and the admin button can't pay twice.
-  async function runPayout(date = today()) {
+  const runPayout = (date = today()) => withLock('payout', () => runPayoutNow(date));
+  async function runPayoutNow(date) {
     const paid = await getMeta('payouts', []);
     if (paid.includes(date)) return { already: true, total: 0 };
     const { incomeRate } = await getSettings();
@@ -259,14 +271,31 @@ export function createSeason2(ctx) {
     return { total };
   }
 
-  // Runs every minute: daily payout on work days, and closing the weekly vote.
+  // Runs every minute: bet expiry, the daily payout on work days, and closing the weekly vote.
+  // It also catches up on what a stopped server missed (an update or a crash at 18:00):
+  // unpaid work days of the last week, and earlier weeks whose vote was never closed.
   async function tick() {
     const s = await getSettings();
     const date = today();
     await duels.expireStale(); // unanswered bet invitations get their stake back at the lock time
-    if (time() < s.payoutTime) return;
-    if (isWorkDay(date, s.workDays)) await runPayout(date);
-    if (weekday(date) === s.voteDay) await closeVote(weekKey(date));
+
+    // Days before the server first ran are never "missed".
+    let since = await getMeta('gameStart', null);
+    if (!since) { since = date; await setMeta('gameStart', date); }
+    const paid = await getMeta('payouts', []);
+    for (let back = CATCH_UP_DAYS; back >= 1; back -= 1) {
+      const day = addDays(date, -back);
+      if (day >= since && isWorkDay(day, s.workDays) && !paid.includes(day)) await runPayout(day);
+    }
+    const week = weekKey(date);
+    const closed = await getMeta('votesClosed', []);
+    const openPastWeeks = [...new Set((await db.find('votes')).map((v) => v.week))].filter((w) => w < week && !closed.includes(w));
+    for (const w of openPastWeeks.sort()) await closeVote(w);
+
+    const afterPayout = time() >= s.payoutTime;
+    if (afterPayout && isWorkDay(date, s.workDays)) await runPayout(date);
+    // This week's vote closes on the vote day's evening, or later in the week if the server was down then.
+    if ((weekday(date) === s.voteDay && afterPayout) || weekday(date) > s.voteDay) await closeVote(week);
   }
 
   // ---------- shared views ----------
@@ -519,23 +548,24 @@ export function createSeason2(ctx) {
       res.json(list.map((b) => ({ ...b, playerName: players[b.playerId]?.name, playerPhoto: photoOf(players[b.playerId]) })));
     }));
 
-    admin.post('/billboards/:id/approve', wrap(async (req, res) => {
+    // Approve and reject take turns, so a quick double click can't both show and refund a billboard.
+    admin.post('/billboards/:id/approve', wrap((req, res) => withLock('billboards', async () => {
       const bb = await db.findOne('billboards', { id: req.params.id });
       if (!bb || bb.status !== 'pending') throw fail(404, 'שלט ממתין לא נמצא');
       await db.updateOne('billboards', { id: bb.id }, { status: 'approved', date: today(), decidedAt: nowIso() });
       const p = await db.findOne('players', { id: bb.playerId });
       await addEvent('billboard', `📺 שלט חדש של ${p?.name} על מסך הטלוויזיה`, bb.playerId);
       res.json({ ok: true });
-    }));
+    })));
 
     // Rejecting refunds the player: the spend record is removed, and balances are derived.
-    admin.post('/billboards/:id/reject', wrap(async (req, res) => {
+    admin.post('/billboards/:id/reject', wrap((req, res) => withLock('billboards', async () => {
       const bb = await db.findOne('billboards', { id: req.params.id });
       if (!bb || bb.status !== 'pending') throw fail(404, 'שלט ממתין לא נמצא');
       await db.updateOne('billboards', { id: bb.id }, { status: 'rejected', decidedAt: nowIso() });
       await db.deleteMany('spend', { id: `${bb.id}:spend` });
       res.json({ ok: true });
-    }));
+    })));
 
     // ===== admin: TV announcements =====
     // Free messages from the admin ("Congrats to Hani!"). They run in the TV ticker;
@@ -591,8 +621,16 @@ export function createSeason2(ctx) {
     }));
 
     // ===== admin: payout, vote, TV =====
-    admin.post('/payout', wrap(async (req, res) => res.json(await runPayout(today()))));
-    admin.post('/vote/close', wrap(async (req, res) => res.json(await closeVote(weekKey(today())))));
+    admin.post('/payout', wrap(async (req, res) => {
+      const { workDays } = await getSettings();
+      if (!isWorkDay(today(), workDays)) throw fail(400, 'היום הוא לא יום עבודה, אין הכנסה יומית');
+      res.json(await runPayout(today()));
+    }));
+    admin.post('/vote/close', wrap(async (req, res) => {
+      const { voteDay } = await getSettings();
+      if (weekday(today()) < voteDay) throw fail(400, 'ההצבעה של השבוע עוד לא נפתחה. אפשר לסגור אותה רק מיום ההצבעה והלאה');
+      res.json(await closeVote(weekKey(today())));
+    }));
     admin.post('/tv/reset', wrap(async (req, res) => {
       if (process.env.TV_TOKEN) throw fail(400, 'קוד הטלוויזיה מוגדר בקובץ .env (TV_TOKEN) ואפשר לשנות אותו רק שם');
       await setMeta('tvToken', newToken());
@@ -601,10 +639,9 @@ export function createSeason2(ctx) {
 
     // ===== TV screen (read-only, its own code) =====
     const tv = express.Router();
+    const tvGuard = createCodeGuard('קוד טלוויזיה לא תקין'); // same limits as the admin code
     tv.use((req, res, next) => {
-      getTvToken()
-        .then((token) => (req.get('x-tv-token') === token ? next() : res.status(401).json({ error: 'קוד טלוויזיה לא תקין' })))
-        .catch(next);
+      getTvToken().then((token) => tvGuard(req, res, next, token, 'x-tv-token')).catch(next);
     });
     tv.get('/state', wrap(async (req, res) => {
       const board = await leaderboard();
@@ -649,6 +686,25 @@ export function createSeason2(ctx) {
         });
       }
 
+      // The results ceremony shows the most recently published day. That is usually today, but
+      // when yesterday's answers are entered this morning, the ceremony shows yesterday's.
+      const lastResults = (await db.find('events', { type: 'results' })).sort((a, b) => b.at.localeCompare(a.at))[0];
+      const revealDate = lastResults?.date || date;
+      let revealQuestions = qs.filter((q) => q.resolved);
+      if (revealDate !== date) {
+        revealQuestions = [];
+        for (const q of (await db.find('questions', { date: revealDate })).sort((a, b) => a.order - b.order)) {
+          if (!q.resolved) continue;
+          const kind = q.kind || 'number';
+          const guesses = await db.find('guesses', { questionId: q.id });
+          revealQuestions.push({
+            id: q.id, text: q.text, unit: q.unit, kind, resolved: true, answer: q.answer,
+            winners: guesses.filter((g) => (kind === 'yesno' ? g.value === q.answer : g.closest)).map((g) => ({ ...face(g.playerId), value: g.value })),
+            guesses: guesses.map((g) => ({ ...face(g.playerId), value: g.value, points: (g.points || 0) + (g.bonus || 0) })),
+          });
+        }
+      }
+
       // Countdown to the next lock, and who still owes a guess (faces on screen = friendly pressure).
       let countdown = null;
       if (openLocks.length) {
@@ -673,7 +729,7 @@ export function createSeason2(ctx) {
 
       const billboards = (await db.find('billboards', { status: 'approved', date }))
         .map((b) => ({ id: b.id, text: b.text, name: players[b.playerId]?.name, photo: photoOf(players[b.playerId]) }));
-      const feed = (await db.find('events')).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 15)
+      const feed = (await db.recent('events', 15))
         .map((e) => (e.playerId ? { ...e, name: players[e.playerId]?.name, photo: photoOf(players[e.playerId]) } : e));
       const announcements = (await db.find('announcements')).filter(isActive)
         .sort((a, b) => a.at.localeCompare(b.at))
@@ -692,6 +748,7 @@ export function createSeason2(ctx) {
         architecture: await getArchitecture(),
         leader,
         questions: qs,
+        reveal: { date: revealDate, questions: revealQuestions },
         countdown,
         incidents: await incidentsView(),
         billboards,
@@ -709,6 +766,10 @@ export function createSeason2(ctx) {
     if (timer) return;
     timer = setInterval(() => tick().catch((e) => console.error('season2 job failed:', e)), 60 * 1000);
   }
+  function stopJobs() {
+    clearInterval(timer);
+    timer = null;
+  }
 
-  return { register, startJobs, cityOf, playerBadges, badgeContext, meExtras, adminExtras, runPayout, closeVote };
+  return { register, startJobs, stopJobs, cityOf, playerBadges, badgeContext, meExtras, adminExtras, runPayout, closeVote };
 }

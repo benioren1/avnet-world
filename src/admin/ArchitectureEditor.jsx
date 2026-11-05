@@ -104,19 +104,35 @@ function Editor({ initial, onPersist, purchaseCounts = {} }) {
   // Autosave to the server shortly after every change (skipping the initial load).
   const firstRender = useRef(true);
   const [saveError, setSaveError] = useState('');
+  // An edit not saved yet is kept in a ref: if the admin switches tab (the editor unmounts)
+  // or closes the page within the 0.7s wait, it is saved right away instead of being dropped.
+  const pending = useRef(null);
+  const saveNow = useCallback(() => {
+    const arch = pending.current;
+    if (!arch) return;
+    pending.current = null;
+    onPersist(arch)
+      .then((res) => {
+        setSavedAt(new Date());
+        setSaveError('');
+        if (res?.refunded) notify(`💰 ${res.refunded} רכישות בוטלו והכסף הוחזר לשחקנים`);
+      })
+      .catch((e) => setSaveError(e.message));
+  }, [onPersist]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (firstRender.current) { firstRender.current = false; return undefined; }
-    const t = setTimeout(() => {
-      onPersist(serialize({ domains, nodes, edges }))
-        .then((res) => {
-          setSavedAt(new Date());
-          setSaveError('');
-          if (res?.refunded) notify(`💰 ${res.refunded} רכישות בוטלו והכסף הוחזר לשחקנים`);
-        })
-        .catch((e) => setSaveError(e.message));
-    }, 700);
+    pending.current = serialize({ domains, nodes, edges });
+    const t = setTimeout(saveNow, 700);
     return () => clearTimeout(t);
-  }, [domains, nodes, edges, onPersist]);
+  }, [domains, nodes, edges, saveNow]);
+  useEffect(() => {
+    const flushOnLeave = () => saveNow();
+    window.addEventListener('beforeunload', flushOnLeave);
+    return () => {
+      window.removeEventListener('beforeunload', flushOnLeave);
+      flushOnLeave(); // leaving the tab
+    };
+  }, [saveNow]);
 
   const undo = useCallback(() => { const s = history.undo(); if (s) restore(s); }, [history, restore]);
   const redo = useCallback(() => { const s = history.redo(); if (s) restore(s); }, [history, restore]);

@@ -18,15 +18,26 @@ const app = express();
 // Behind a reverse proxy / Kubernetes ingress, req.ip would be the proxy's address for
 // everyone, so the admin lockout would lock out the whole team. TRUST_PROXY=1 means
 // "one proxy in front of me" and makes req.ip the real visitor again.
+// "true" would trust any X-Forwarded-For a visitor makes up (unlimited admin-code guesses),
+// so only a hop count or a list of proxy addresses/subnets is accepted.
 if (process.env.TRUST_PROXY && process.env.TRUST_PROXY !== '0') {
-  const hops = Number(process.env.TRUST_PROXY);
-  app.set('trust proxy', Number.isNaN(hops) ? process.env.TRUST_PROXY : hops);
+  const value = process.env.TRUST_PROXY.trim();
+  const hops = Number(value);
+  if (value === 'true') console.warn('⚠️  TRUST_PROXY=true is not allowed; using 1 (one proxy in front).');
+  app.set('trust proxy', value === 'true' ? 1 : Number.isNaN(hops) ? value : hops);
 }
 app.use(express.json({ limit: '3mb' }));
 
 // For Kubernetes liveness/readiness probes and Docker HEALTHCHECK: no auth, answers
 // only once the store is connected (this line runs after createStore succeeded).
-app.get('/api/health', (req, res) => res.json({ ok: true, store: db.kind }));
+app.get('/api/health', async (req, res) => {
+  try {
+    await db.ping();
+    res.json({ ok: true, store: db.kind });
+  } catch (e) {
+    res.status(503).json({ ok: false, store: db.kind, error: 'database unreachable' });
+  }
+});
 
 // ---------- helpers ----------
 const newId = (p) => `${p}-${crypto.randomBytes(5).toString('hex')}`;
@@ -114,8 +125,24 @@ function withLock(key, fn) {
 
 // Strict number parsing for user input: '' and null are "missing", not 0.
 function toNumber(raw) {
-  if (raw === '' || raw === null || raw === undefined || typeof raw === 'boolean') return NaN;
+  if (raw === null || raw === undefined || typeof raw === 'boolean') return NaN;
+  if (typeof raw === 'string' && !raw.trim()) return NaN; // "" and "  " are not 0
   return Number(raw);
+}
+
+// A real calendar date in YYYY-MM-DD form ("2026-11-5" or "tomorrow" would never match today()).
+function validDate(date) {
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const d = new Date(`${date}T12:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === date;
+}
+
+// A day whose results were published gets its "perfect day" and "results" records rebuilt
+// on the next publish; adding a question makes the day incomplete again, so they go now
+// (otherwise a perfect-day bonus paid at 17:00 would stay even if the new question is missed).
+async function reopenDay(date) {
+  await db.deleteMany('bonuses', { date, kind: 'perfect' });
+  await db.deleteMany('events', { date, type: { $in: ['perfect', 'results'] } });
 }
 
 // Photos are served from their own cacheable URL instead of being inlined as data URLs
@@ -184,15 +211,12 @@ if (!adminToken) {
   await setMeta('adminToken', adminToken);
 }
 
-if (process.env.ADMIN_TOKEN && process.env.ADMIN_TOKEN.length < 8) {
-  console.warn('⚠️  ADMIN_TOKEN is shorter than 8 characters. Choose a longer admin code.');
+// Refuse to start with a code anyone can know: the one from the Kubernetes template, or a short one.
+const KNOWN_CODES = ['change-me-admin-code', 'changeme', 'admin', 'password'];
+if (process.env.ADMIN_TOKEN && (process.env.ADMIN_TOKEN.length < 8 || KNOWN_CODES.includes(process.env.ADMIN_TOKEN))) {
+  console.error('❌ ADMIN_TOKEN is too short or is the example value. Set your own admin code (at least 8 characters).');
+  process.exit(1);
 }
-
-// Wrong admin codes are counted per IP; after MAX_FAILS the IP is locked out for a while,
-// so a typed (human-chosen) code can't be brute-forced.
-const MAX_FAILS = 5;
-const LOCK_MS = 15 * 60 * 1000;
-const failures = new Map(); // ip -> { count, lockedUntil }
 
 function safeEqual(a, b) {
   const x = Buffer.from(String(a));
@@ -200,24 +224,38 @@ function safeEqual(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 
-function requireAdmin(req, res, next) {
-  const ip = req.ip;
-  const entry = failures.get(ip);
-  if (entry?.lockedUntil > Date.now()) {
-    const minutes = Math.ceil((entry.lockedUntil - Date.now()) / 60000);
-    return res.status(429).json({ error: `יותר מדי ניסיונות שגויים. נסה שוב בעוד ${minutes} דקות` });
-  }
-  const token = req.get('x-admin-token') || '';
-  if (!safeEqual(token, adminToken)) {
-    if (token) {
-      const expired = entry?.lockedUntil && entry.lockedUntil <= Date.now();
-      const count = (expired ? 0 : entry?.count || 0) + 1;
-      failures.set(ip, { count, lockedUntil: count >= MAX_FAILS ? Date.now() + LOCK_MS : 0 });
+// Guards a typed (human-chosen) code against guessing. Wrong codes are counted per IP, and
+// after MAX_FAILS that IP waits LOCK_MS. A global cap also stops someone who changes IP on
+// every try. The right code always gets in, so a prankster can't lock the real admin out.
+const MAX_FAILS = 5;
+const LOCK_MS = 15 * 60 * 1000;
+const GLOBAL_MAX_FAILS = 50; // per hour, from all IPs together
+function createCodeGuard(label) {
+  const failures = new Map(); // ip -> { count, lockedUntil, at }
+  let recent = []; // times of wrong tries in the last hour, all IPs
+  return (req, res, next, expected, header) => {
+    const token = req.get(header) || '';
+    if (token && expected && safeEqual(token, expected)) { failures.delete(req.ip); return next(); }
+    const now = Date.now();
+    recent = recent.filter((t) => now - t < 60 * 60 * 1000);
+    for (const [ip, e] of failures) if (now - e.at > LOCK_MS) failures.delete(ip); // keep the map small
+    const entry = failures.get(req.ip);
+    if (entry?.lockedUntil > now || recent.length >= GLOBAL_MAX_FAILS) {
+      const minutes = entry?.lockedUntil > now ? Math.ceil((entry.lockedUntil - now) / 60000) : 60;
+      return res.status(429).json({ error: `יותר מדי ניסיונות שגויים. נסה שוב בעוד ${minutes} דקות` });
     }
-    return res.status(401).json({ error: 'אין הרשאת מנהל' });
-  }
-  failures.delete(ip);
-  next();
+    if (token) {
+      recent.push(now);
+      const count = (entry?.count || 0) + 1;
+      failures.set(req.ip, { count, at: now, lockedUntil: count >= MAX_FAILS ? now + LOCK_MS : 0 });
+    }
+    return res.status(401).json({ error: label });
+  };
+}
+
+const adminGuard = createCodeGuard('אין הרשאת מנהל');
+function requireAdmin(req, res, next) {
+  return adminGuard(req, res, next, adminToken, 'x-admin-token');
 }
 
 async function requirePlayer(req, res, next) {
@@ -240,7 +278,7 @@ const duels = createDuels({ db, newId, nowLocal, today, getSettings, addEvent, w
 // Season 2 features (mining, incidents, upgrades, cosmetics, TV...) live in their own module.
 const season2 = createSeason2({
   db, newId, newToken, nowLocal, today, getMeta, setMeta, getSettings, getArchitecture,
-  addEvent, wallet, wrap, fail, publicPlayer, isLocked, lockAtFor, leaderboard, duels, withLock, photoOf,
+  addEvent, wallet, wrap, fail, publicPlayer, isLocked, lockAtFor, leaderboard, duels, withLock, photoOf, createCodeGuard,
 });
 
 // =============== ADMIN ===============
@@ -304,7 +342,7 @@ admin.put('/settings', wrap(async (req, res) => {
   const next = { ...(await getSettings()) };
   for (const key of TIME_KEYS) {
     if (!(key in req.body)) continue;
-    if (!/^\d{2}:\d{2}$/.test(req.body[key] || '')) throw fail(400, `שעה לא תקינה: ${key}`);
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(req.body[key] || '')) throw fail(400, `שעה לא תקינה: ${key} (בין 00:00 ל-23:59)`);
     next[key] = req.body[key];
   }
   for (const [key, [min, max]] of Object.entries(NUMBER_KEYS)) {
@@ -436,6 +474,7 @@ admin.post('/questions', wrap(async (req, res) => {
   const { date = today(), componentId = '', text, unit = '', kind = 'number' } = req.body;
   if (!text?.trim()) throw fail(400, 'חסר טקסט לשאלה');
   if (!QUESTION_KINDS.includes(kind)) throw fail(400, 'סוג שאלה לא תקין');
+  if (!validDate(date)) throw fail(400, 'תאריך לא תקין');
   if (date < today()) throw fail(400, 'אי אפשר להוסיף שאלה ליום שעבר');
   const existing = await db.find('questions', { date });
   if (existing.length >= MAX_QUESTIONS_PER_DAY) throw fail(400, `מקסימום ${MAX_QUESTIONS_PER_DAY} שאלות ביום`);
@@ -445,11 +484,13 @@ admin.post('/questions', wrap(async (req, res) => {
     order: existing.length, answer: null, resolved: false, lockAt,
   };
   await db.insertOne('questions', q);
+  await reopenDay(date);
   res.json({ ...q, late });
 }));
 
 admin.post('/questions/copy', wrap(async (req, res) => {
   const { from, to = today() } = req.body;
+  if (!validDate(from) || !validDate(to)) throw fail(400, 'תאריך לא תקין');
   if (to < today()) throw fail(400, 'אי אפשר להעתיק שאלות ליום שעבר');
   const source = (await db.find('questions', { date: from })).sort((a, b) => a.order - b.order);
   const existing = await db.find('questions', { date: to });
@@ -462,6 +503,7 @@ admin.post('/questions/copy', wrap(async (req, res) => {
       order: existing.length + i, answer: null, resolved: false, lockAt,
     });
   }
+  if (toCopy.length) await reopenDay(to);
   res.json({ copied: toCopy.length, late });
 }));
 
@@ -489,8 +531,11 @@ admin.delete('/questions/:id', wrap(async (req, res) => {
 }));
 
 // Save the real answers and score the day. Safe to run again (e.g. to fix a typo).
-admin.post('/days/:date/resolve', wrap(async (req, res) => {
+// Runs under a lock, so a double click can't score the day twice at once.
+admin.post('/days/:date/resolve', wrap((req, res) => withLock('resolve', async () => {
   const { date } = req.params;
+  if (!validDate(date)) throw fail(400, 'תאריך לא תקין');
+  if (date > today()) throw fail(400, 'אי אפשר לפרסם תוצאות ליום שעוד לא הגיע');
   const answers = req.body.answers || {};
   const questions = await db.find('questions', { date });
   const players = await db.find('players');
@@ -498,10 +543,11 @@ admin.post('/days/:date/resolve', wrap(async (req, res) => {
 
   for (const q of questions) {
     const raw = answers[q.id];
-    if (raw === undefined || raw === null || raw === '') continue;
-    const answer = Number(raw);
+    if (raw === undefined || raw === null || (typeof raw === 'string' && !raw.trim())) continue;
+    const answer = toNumber(raw);
     if (!Number.isFinite(answer)) throw fail(400, `תשובה לא תקינה לשאלה "${q.text}"`);
     const yesno = q.kind === 'yesno';
+    if (!yesno && answer < 0) throw fail(400, `בשאלה "${q.text}" התשובה לא יכולה להיות שלילית (גם הניחושים לא יכולים)`);
     if (yesno && answer !== 0 && answer !== 1) throw fail(400, `בשאלה "${q.text}" התשובה היא כן או לא`);
     const guesses = await db.find('guesses', { questionId: q.id });
     for (const s of (yesno ? scoreYesNo : scoreQuestion)(guesses, answer)) {
@@ -541,7 +587,7 @@ admin.post('/days/:date/resolve', wrap(async (req, res) => {
   const negative = [];
   for (const p of players) if ((await wallet(p.id)).balance < 0) negative.push(p.name);
   res.json({ ok: true, allResolved, negative });
-}));
+})));
 
 // Player photos, by URL so browsers cache them (the ?v= changes when the photo does).
 // <img> tags can't send our token headers, so this route is open: the ids are random,
@@ -626,7 +672,12 @@ play.post('/guesses', wrap(async (req, res) => {
   // Early bird: guessing before earlyTime earns a small bonus, kept as its own bonus record.
   const { earlyTime, earlyBonus } = await getSettings();
   const early = earlyBonus > 0 && nowLocal().slice(11) < earlyTime;
-  await db.insertOne('guesses', { id, questionId: q.id, playerId: req.player.id, value, early, at: new Date().toISOString() });
+  try {
+    await db.insertOne('guesses', { id, questionId: q.id, playerId: req.player.id, value, early, at: new Date().toISOString() });
+  } catch (e) {
+    if (e.code === 'DUPLICATE') throw fail(400, 'כבר ניחשת על השאלה הזו'); // a double click
+    throw e;
+  }
   if (early) {
     await db.insertOne('bonuses', {
       id: `${id}:early`, date: q.date, questionId: q.id, playerId: req.player.id, kind: 'early', points: earlyBonus, at: new Date().toISOString(),
@@ -725,7 +776,7 @@ play.get('/players/:id/owned', wrap(async (req, res) => {
 }));
 
 play.get('/feed', wrap(async (req, res) => {
-  const events = (await db.find('events')).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 40);
+  const events = await db.recent('events', 40);
   res.json(events);
 }));
 
@@ -753,6 +804,22 @@ const server = app.listen(PORT, () => {
   if (process.env.ADMIN_TOKEN) console.log(`Admin link: ${base}/#/admin?key=<your ADMIN_TOKEN>`);
   else console.log(`Admin link: ${base}/#/admin?key=${adminToken}`);
 });
+
+// Kubernetes stops a pod with SIGTERM: finish the requests in progress, stop the jobs,
+// save or disconnect the store, then exit (instead of being killed 30s later mid-request).
+let stopping = false;
+async function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  console.log(`${signal}: shutting down`);
+  season2.stopJobs();
+  setTimeout(() => process.exit(0), 10000).unref(); // never hang longer than this
+  server.close(async () => {
+    try { await db.close(); } catch (e) { console.error(e); }
+    process.exit(0);
+  });
+}
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP']) process.on(sig, () => shutdown(sig));
 
 server.on('error', (e) => {
   if (e.code !== 'EADDRINUSE') throw e;

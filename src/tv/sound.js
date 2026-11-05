@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 // Small synthesized sound effects for the TV (no audio files, works offline).
 // Browsers only allow sound after someone clicks the page once, so it starts muted
@@ -25,7 +25,11 @@ const SOUNDS = {
 
 export function useSound() {
   const [on, setOn] = useState(readPref);
+  // After the TV browser restarts, "on" is remembered but the browser keeps audio blocked
+  // until someone clicks the page once; `blocked` lets the button say so.
+  const [blocked, setBlocked] = useState(false);
   const ctx = useRef(null);
+  useEffect(() => () => { ctx.current?.close().catch(() => {}); }, []);
 
   const audio = () => {
     if (!ctx.current) {
@@ -33,7 +37,10 @@ export function useSound() {
       if (!Ctx) return null;
       ctx.current = new Ctx();
     }
-    if (ctx.current.state === 'suspended') ctx.current.resume().catch(() => {});
+    if (ctx.current.state === 'suspended') {
+      ctx.current.resume().then(() => setBlocked(false)).catch(() => {});
+      if (ctx.current.state === 'suspended') setBlocked(true);
+    }
     return ctx.current;
   };
 
@@ -57,13 +64,14 @@ export function useSound() {
   }, [on]);
 
   const toggle = useCallback(() => {
+    if (blocked) { audio(); return; } // the click itself unblocks it; keep it on
     setOn((v) => {
       writePref(!v);
       if (!v) audio(); // the click unlocks audio in the browser
       return !v;
     });
-  }, []);
+  }, [blocked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Stable object, so effects that depend on it don't re-run (and replay sounds) every render.
-  return useMemo(() => ({ on, play, toggle }), [on, play, toggle]);
+  return useMemo(() => ({ on, blocked: on && blocked, play, toggle }), [on, blocked, play, toggle]);
 }

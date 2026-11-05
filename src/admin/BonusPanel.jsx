@@ -3,6 +3,7 @@ import { Gift, History, Undo2 } from 'lucide-react';
 import { adminApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 import { Coin } from '../icons.jsx';
+import { useBusy } from '../useBusy.js';
 
 const AMOUNTS = [50, 100, 200, 500];
 const REASONS = [
@@ -29,10 +30,12 @@ export default function BonusPanel({ players }) {
   const loadHistory = useCallback(() => adminApi.get('/bonuses').then(setHistory), []);
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
-  const give = async (e) => {
+  const [giving, guardGive] = useBusy();
+  const give = (e) => {
     e.preventDefault();
     if (!playerId) return setMsg({ text: 'בחר למי הבונוס', kind: 'error' });
     if (!reason.trim()) return setMsg({ text: 'כתוב על מה הבונוס', kind: 'error' });
+    return guardGive(async () => {
     try {
       await adminApi.post(`/players/${playerId}/bonus`, { amount: Number(amount), reason: reason.trim() });
       setMsg({ text: `🏅 ${byId[playerId].name} קיבל/ה ${Number(amount).toLocaleString()} דינרים. זה יופיע לכל הצוות בפיד`, kind: 'ok' });
@@ -42,6 +45,7 @@ export default function BonusPanel({ players }) {
     } catch (err) {
       setMsg({ text: err.message, kind: 'error' });
     }
+    });
   };
 
   const cancel = async (b) => {
@@ -111,7 +115,7 @@ export default function BonusPanel({ players }) {
 
         <div className="bonus-submit">
           {msg && <span className={msg.kind === 'error' ? 'msg-error' : 'msg-ok'}>{msg.text}</span>}
-          <button className="primary" type="submit"><Gift size={16} /> תן בונוס</button>
+          <button className="primary" type="submit" disabled={giving}><Gift size={16} /> תן בונוס</button>
         </div>
       </form>
 

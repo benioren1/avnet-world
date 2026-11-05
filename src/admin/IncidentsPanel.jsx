@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Flame, History, Siren } from 'lucide-react';
 import { adminApi } from '../api.js';
+import { useBusy } from '../useBusy.js';
 import Avatar from '../Avatar.jsx';
 import { Coin, TypeIcon } from '../icons.jsx';
 
@@ -33,10 +34,11 @@ export default function IncidentsPanel({ architecture, players, settings, onChan
     }
   };
 
+  const [declaring, guardDeclare] = useBusy();
   const declare = (e) => {
     e.preventDefault();
-    run(adminApi.post('/incidents', { componentIds: picked, description }).then(() => { setPicked([]); setDescription(''); }),
-      '🚨 התקלה הוכרזה. הרכיבים בוערים אצל כל השחקנים');
+    guardDeclare(() => run(adminApi.post('/incidents', { componentIds: picked, description }).then(() => { setPicked([]); setDescription(''); }),
+      '🚨 התקלה הוכרזה. הרכיבים בוערים אצל כל השחקנים'));
   };
 
   const resolve = (incident) => run(
@@ -112,7 +114,7 @@ export default function IncidentsPanel({ architecture, players, settings, onChan
         <div className="field-label">מה קרה?</div>
         <input placeholder="למשל: קולט ה-FTP לא מקבל קבצים מהספק" value={description} onChange={(e) => setDescription(e.target.value)} />
         <div className="bonus-submit">
-          <button className="danger-btn" type="submit" disabled={!picked.length || !description.trim()}><Flame size={16} /> הכרז תקלה</button>
+          <button className="danger-btn" type="submit" disabled={declaring || !picked.length || !description.trim()}><Flame size={16} /> הכרז תקלה</button>
         </div>
       </form>
 
