@@ -2,3 +2,6 @@ node_modules/
 dist/
 data/
 .env
+
+# Filled Kubernetes secret (only the template is committed)
+deploy/k8s/secret.yaml

@@ -15,7 +15,18 @@ const MAX_QUESTIONS_PER_DAY = 5;
 
 const db = await createStore();
 const app = express();
+// Behind a reverse proxy / Kubernetes ingress, req.ip would be the proxy's address for
+// everyone, so the admin lockout would lock out the whole team. TRUST_PROXY=1 means
+// "one proxy in front of me" and makes req.ip the real visitor again.
+if (process.env.TRUST_PROXY && process.env.TRUST_PROXY !== '0') {
+  const hops = Number(process.env.TRUST_PROXY);
+  app.set('trust proxy', Number.isNaN(hops) ? process.env.TRUST_PROXY : hops);
+}
 app.use(express.json({ limit: '3mb' }));
+
+// For Kubernetes liveness/readiness probes and Docker HEALTHCHECK: no auth, answers
+// only once the store is connected (this line runs after createStore succeeded).
+app.get('/api/health', (req, res) => res.json({ ok: true, store: db.kind }));
 
 // ---------- helpers ----------
 const newId = (p) => `${p}-${crypto.randomBytes(5).toString('hex')}`;

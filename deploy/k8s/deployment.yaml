@@ -1,0 +1,66 @@
+# The game server. It must run as exactly ONE pod: money operations are locked in
+# memory, so two pods could let a player spend the same dinars twice.
+# That is why replicas is 1 and the strategy is Recreate (the old pod stops before
+# the new one starts, never two at once).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: avnet-world
+  labels:
+    app: avnet-world
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: avnet-world
+  template:
+    metadata:
+      labels:
+        app: avnet-world
+    spec:
+      containers:
+        - name: avnet-world
+          # Put the image name from your internal registry here.
+          image: registry.example.local/avnet-world:1.0
+          ports:
+            - containerPort: 3001
+              name: http
+          envFrom:
+            - configMapRef:
+                name: avnet-world-config
+            - secretRef:
+                name: avnet-world-secret
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: avnet-world
+spec:
+  selector:
+    app: avnet-world
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
