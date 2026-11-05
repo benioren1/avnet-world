@@ -34,7 +34,7 @@ function ComponentNode({ id, data, selected }) {
   if (ghost) classes.push('ghost');
   if (owned && !ghost) classes.push('owned', `lvl${level}`);
   if (onFire) classes.push('burning');
-  if (fx) classes.push(`fx-${fx.kind}`);
+  if (fx) classes.push(`cfx-${fx.kind}`);
   else if (justBought === id) classes.push('celebrate', `celebrate-${celebration || 'pulse'}`);
   const burst = celebration && celebration !== 'pulse' && (fx ? fx.kind !== 'visit' : justBought === id);
   const fxStyle = fx ? { '--domain': color, '--fx-delay': `${fx.delay}ms` } : null;
@@ -69,7 +69,7 @@ function ComponentNode({ id, data, selected }) {
       )}
       <Handle type="source" position={Position.Right} isConnectable={editable} />
     </div>
-    {fx && <div key={`f${fx.key}`} className={`fx-flash fx-flash-${fx.kind}`} style={fxStyle} aria-hidden="true" />}
+    {fx && <div key={`f${fx.key}`} className={`cfx-flash cfx-flash-${fx.kind}`} style={fxStyle} aria-hidden="true" />}
     </>
   );
 }
@@ -82,8 +82,8 @@ function CityFxLayer({ kind, level, style }) {
   return (
     <div className={`city-fx city-fx-${kind}${level === 3 ? ' gold' : ''}`} style={style} aria-hidden="true">
       {kind === 'upgrade'
-        ? <><i className="fx-ring" /><i className="fx-ring second" /></>
-        : <><i className="fx-scaffold" /><i className="fx-wave" /></>}
+        ? <><i className="cfx-ring" /><i className="cfx-ring second" /></>
+        : <><i className="cfx-scaffold" /><i className="cfx-wave" /></>}
     </div>
   );
 }
