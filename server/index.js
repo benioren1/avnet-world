@@ -789,9 +789,32 @@ const dist = path.resolve('dist');
 const servesFrontend = fs.existsSync(dist);
 if (servesFrontend) {
   // index.html must never be cached, or browsers keep running an old version after an update.
-  // The JS/CSS files have a content hash in their name, so they can be cached safely.
+  // Files in /assets have a content hash in their name (a new version gets a new name),
+  // so browsers may keep them for a year without asking again.
   const noCache = (res) => res.setHeader('Cache-Control', 'no-cache');
-  app.use(express.static(dist, { setHeaders: (res, file) => { if (file.endsWith('.html')) noCache(res); } }));
+  const forever = (res) => res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  const assets = path.join(dist, 'assets');
+  // The build writes .br and .gz copies of the JS/CSS (vite.config.js); send the smallest one the browser accepts.
+  app.get('/assets/:file', (req, res, next) => {
+    const file = path.join(assets, path.basename(req.params.file));
+    for (const [encoding, ext] of [['br', '.br'], ['gzip', '.gz']]) {
+      if (req.acceptsEncodings(encoding) !== encoding || !fs.existsSync(file + ext)) continue;
+      res.setHeader('Vary', 'Accept-Encoding');
+      res.setHeader('Content-Encoding', encoding);
+      res.type(path.extname(file));
+      forever(res);
+      return res.sendFile(file + ext, { acceptRanges: false }, (err) => err && next(err));
+    }
+    next();
+  });
+  app.use(express.static(dist, {
+    setHeaders: (res, file) => {
+      if (file.endsWith('.html')) noCache(res);
+      else if (path.dirname(file) === assets) { forever(res); res.setHeader('Vary', 'Accept-Encoding'); }
+    },
+  }));
+  // A missing asset is a 404, not the web page (which a browser would try to run as a script).
+  app.use('/assets', (req, res) => res.status(404).end());
   app.get('*', (req, res) => { noCache(res); res.sendFile(path.join(dist, 'index.html')); });
 }
 

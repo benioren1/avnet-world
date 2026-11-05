@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Building2, Lock, Palette, ShieldCheck, ShoppingBag, Sun, Swords, Trophy } from 'lucide-react';
+import { AlertTriangle, Building2, Coins, Lock, Palette, ShieldCheck, ShoppingBag, Sun, Swords, Trophy } from 'lucide-react';
 import { playerApi, readToken } from '../api.js';
 import Avatar from '../Avatar.jsx';
-import { Coin } from '../icons.jsx';
 import TodayPanel from './TodayPanel.jsx';
 import CityMap from './CityMap.jsx';
 import Shop from './Shop.jsx';
@@ -10,6 +9,9 @@ import Leaderboard from './Leaderboard.jsx';
 import Studio from './Studio.jsx';
 import MineButton from './MineButton.jsx';
 import DuelsPanel from './DuelsPanel.jsx';
+import { FxProvider, useFx } from '../fx/GameFx.jsx';
+import { RollingNumber } from '../fx/motion.jsx';
+import SoundToggle from '../fx/SoundToggle.jsx';
 
 const TABS = [
   ['today', 'היום', Sun],
@@ -22,7 +24,13 @@ const TABS = [
 
 const REFRESH_MS = 60 * 1000;
 
+// The in-game confirm sheet and coin effects wrap the whole player screen.
 export default function PlayerApp() {
+  return <FxProvider><PlayerScreen /></FxProvider>;
+}
+
+function PlayerScreen() {
+  const { confirm, flyCoins } = useFx();
   const [me, setMe] = useState(null);
   const [architecture, setArchitecture] = useState(null);
   const [board, setBoard] = useState(null);
@@ -107,17 +115,16 @@ export default function PlayerApp() {
   const buy = async (componentId) => {
     const node = architecture.nodes.find((n) => n.id === componentId);
     const price = Number(node?.data.price) || 0;
-    const left = me.wallet.balance - price;
-    if (!window.confirm(`לקנות את "${node?.data.name}" ב-${price.toLocaleString()} דינרים? תישאר עם ${left.toLocaleString()}`)) return;
+    if (!(await confirm({ icon: '🏗️', title: `לקנות את "${node?.data.name}"?`, price, balance: me.wallet.balance, okLabel: 'קנה' }))) return;
     const res = await act(playerApi.post('/buy', { componentId }), `🏗️ "${node?.data.name}" נוסף לעיר שלך!`);
-    if (res) celebrate(componentId);
+    if (res) { flyCoins(); celebrate(componentId); }
   };
 
   const upgrade = async (componentId, cost, level) => {
     const name = architecture.nodes.find((n) => n.id === componentId)?.data.name;
-    if (!window.confirm(`לשדרג את "${name}" לרמה ${level} ב-${cost.toLocaleString()} דינרים?`)) return;
+    if (!(await confirm({ icon: '⬆️', title: `לשדרג את "${name}" לרמה ${level}?`, price: cost, balance: me.wallet.balance, okLabel: 'שדרג' }))) return;
     const res = await act(playerApi.post('/upgrade', { componentId }), `⬆️ "${name}" עלה לרמה ${level}!`);
-    if (res) celebrate(componentId);
+    if (res) { flyCoins(); celebrate(componentId); }
   };
 
   const visit = async (playerId) => {
@@ -196,10 +203,14 @@ export default function PlayerApp() {
         </nav>
         <MineButton mining={me.mining} onMined={refresh} notify={notify} />
         <div className="stats">
-          <div><b><Coin value={me.wallet.balance} size={15} /></b><span>דינרים</span></div>
+          <div>
+            <b><span className="coin fx-balance" data-fx-balance><Coins size={15} strokeWidth={2} /><RollingNumber value={me.wallet.balance} /></span></b>
+            <span>דינרים</span>
+          </div>
           <div><b>{me.wallet.owned.length}<small className="muted">/{architecture.nodes.length}</small></b><span>רכיבים</span></div>
         </div>
         {/* Only a browser that holds the admin key sees this; the server still checks the key on every admin call. */}
+        <SoundToggle />
         {readToken('admin') && <a className="switch-link" href="#/admin"><ShieldCheck size={15} /> ניהול</a>}
       </header>
 
@@ -213,7 +224,7 @@ export default function PlayerApp() {
       )}
 
       <main className="player-main">
-        {tab === 'today' && <TodayPanel refreshKey={tick} architecture={architecture} meId={me.player.id} onChange={refresh} notify={notify} />}
+        {tab === 'today' && <TodayPanel refreshKey={tick} architecture={architecture} meId={me.player.id} onChange={refresh} notify={notify} celebration={me.profile.celebration} />}
         {tab === 'city' && (
           <CityMap
             architecture={architecture}

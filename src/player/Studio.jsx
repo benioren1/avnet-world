@@ -4,6 +4,7 @@ import { playerApi } from '../api.js';
 import Avatar from '../Avatar.jsx';
 import { Coin } from '../icons.jsx';
 import { useBusy } from '../useBusy.js';
+import { useFx } from '../fx/GameFx.jsx';
 
 const STATUS = { pending: '⏳ ממתין לאישור', approved: '✅ מוצג היום בטלוויזיה', rejected: '↩️ נדחה, הכסף הוחזר' };
 
@@ -48,27 +49,40 @@ export default function Studio({ me, onChange, notify, onPlace }) {
 
   // Paid actions run one at a time, so a second tap on a slow network can't pay twice.
   const [busy, guard] = useBusy();
+  const { confirm, flyCoins } = useFx();
+
+  // Returns true when the server said yes, so a purchase can fly its coins.
   const act = async (promise, ok) => {
     try {
       await promise;
       if (ok) notify(ok);
       await onChange();
+      return true;
     } catch (e) {
       notify(`❌ ${e.message}`);
+      return false;
     }
   };
 
-  const buy = (key, item) => {
-    if (!window.confirm(`לקנות "${item.label}" ב-${item.price.toLocaleString()} דינרים? תישאר עם ${(balance - item.price).toLocaleString()}`)) return;
-    guard(() => act(playerApi.post('/cosmetics/buy', { key }), `✨ "${item.label}" שלך!`));
+  const buy = async (key, item) => {
+    if (!(await confirm({ icon: '✨', title: `לקנות "${item.label}"?`, price: item.price, balance, okLabel: 'קנה' }))) return;
+    await guard(async () => {
+      if (await act(playerApi.post('/cosmetics/buy', { key }), `✨ "${item.label}" שלך!`)) flyCoins();
+    });
   };
   const equip = (group, id) => act(playerApi.post('/profile', { [group]: id }));
 
-  const sendBillboard = (e) => {
+  const sendBillboard = async (e) => {
     e.preventDefault();
     if (!billboard.trim()) return;
-    if (!window.confirm(`לשלוח את השלט לאישור ב-${catalog.billboardPrice} דינרים? אם הוא לא יאושר, הכסף יחזור אליך.`)) return;
-    guard(() => act(playerApi.post('/billboards', { text: billboard }).then(() => { setBillboard(''); loadBillboards(); }), '📺 השלט נשלח לאישור'));
+    const ok = await confirm({
+      icon: '📺', title: 'לשלוח את השלט לאישור?', body: `"${billboard.trim()}" · אם הוא לא יאושר, הכסף יחזור אליך.`,
+      price: catalog.billboardPrice, balance, okLabel: 'שלח',
+    });
+    if (!ok) return;
+    await guard(async () => {
+      if (await act(playerApi.post('/billboards', { text: billboard }).then(() => { setBillboard(''); loadBillboards(); }), '📺 השלט נשלח לאישור')) flyCoins();
+    });
   };
 
   return (
