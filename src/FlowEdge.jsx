@@ -25,7 +25,7 @@ export default function FlowEdge({
           <g className="flow-dots">
             {PARTICLES.map((i) => (
               <circle key={i} r={3 - i * 0.5} className="flow-dot">
-                <animateMotion dur="2.4s" begin={`${i * 0.8}s`} repeatCount="indefinite" path={path} />
+                <animateMotion dur="2.4s" begin={`${-i * 0.8}s`} repeatCount="indefinite" path={path} />
               </circle>
             ))}
           </g>
