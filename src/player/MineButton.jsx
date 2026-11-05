@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Pickaxe } from 'lucide-react';
 import { playerApi } from '../api.js';
+import { play } from '../fx/sound.js';
 
 // The morning mining button: open from mineOpen to mineClose on work days, once a day.
 // A short pickaxe animation plays before the reward is revealed.
@@ -10,8 +11,11 @@ export default function MineButton({ mining, onMined, notify }) {
 
   const mine = async () => {
     setSwinging(true);
+    // One rock hit per pickaxe swing (the swing animation is 3 x 0.3s).
+    const hits = [150, 450, 750].map((t) => setTimeout(() => play('swing'), t));
     try {
       const [res] = await Promise.all([playerApi.post('/mine'), new Promise((r) => setTimeout(r, 900))]);
+      play(res.gold ? 'gold' : 'reward');
       setReward(res);
       setTimeout(() => setReward(null), 3200);
       notify(res.gold
@@ -19,6 +23,7 @@ export default function MineButton({ mining, onMined, notify }) {
         : `⛏️ +${res.amount} דינרים${res.first ? ' (כורה ראשון היום! 🥇)' : ''} · רצף ${res.streak} 🔥`);
       onMined();
     } catch (e) {
+      hits.forEach(clearTimeout);
       notify(`❌ ${e.message}`);
     } finally {
       setSwinging(false);
